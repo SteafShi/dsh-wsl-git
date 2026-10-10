@@ -1,11 +1,11 @@
 {
-  "name": "dsh-ide-git",
-  "version": "0.15.0",
-  "description": "DSH plugin: an IDE-grade Git tool window as a native dsh-better-sidebar tab — branch tree, commit graph, changes, commit details, JetBrains-style actions, in the right sidebar and the bottom panel. | DSH 插件:IDE 级 Git 工具窗口,以 dsh-better-sidebar 原生 Tab 挂载——分支树 / 提交图谱 / 变更与提交详情 / JetBrains 风格操作,右侧栏与底部面板双布局自适应。",
+  "name": "dsh-wsl-git",
+  "version": "0.15.0-wsl",
+  "description": "Fork patch of dsh-ide-git 0.13.5 (MIT): the same IDE-grade Git tool window, but git runs INSIDE the WSL distribution the session workspace belongs to. A WSL workspace path names its own distribution, so nothing is hard-coded and one install serves every distribution; a workspace that is not a WSL workspace behaves exactly as the baseline. Launcher failures are named instead of being served as \"not a git repository\". | dsh-ide-git 0.13.5 的 fork 补丁:同一个 IDE 级 Git 工具窗口,但 git 在会话工作区所属的 WSL 发行版内执行。发行版由工作区路径决定,无需配置;非 WSL 工作区行为与基线完全一致。启动器失败会被点名,不再伪装成「不是 git 仓库」。",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/KannaKuron/dsh-ide-git.git"
+    "url": "git+https://github.com/SteafShi/dsh-wsl-git.git"
   },
   "publishConfig": {
     "access": "public"
@@ -38,17 +38,22 @@
   "files": [
     "icon.svg",
     "locale",
-    "src/index.js",
-    "src/client.js",
+    "src",
     "cordis.patch.yml",
     "dsh.plugin.json",
     "README.md",
-    "README_EN.md",
+    "README.upstream.md",
+    "README.upstream.en.md",
+    "FORK.md",
+    "CHANGELOG.md",
+    "PUBLISHING.md",
+    "NOTICE",
+    "patch",
     "docs/screenshots",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test tests/smoke.mjs tests/api.test.mjs tests/graph.test.mjs tests/repos.test.mjs",
+    "test": "node --test tests/target.test.mjs",
     "version": "node -e \"const fs=require('fs');const m=JSON.parse(fs.readFileSync('dsh.plugin.json','utf8'));const v=JSON.parse(fs.readFileSync('package.json','utf8')).version;m.version=v;fs.writeFileSync('dsh.plugin.json',JSON.stringify(m,null,2)+'\\n')\" && git add dsh.plugin.json",
     "probe:settings-card": "node scripts/settings-card-probe.mjs"
   },
@@ -61,7 +66,11 @@
     "git-gui",
     "source-control",
     "sidebar",
-    "commit-graph"
+    "commit-graph",
+    "wsl",
+    "wsl2",
+    "fork",
+    "dsh-ide-git"
   ],
   "license": "MIT",
   "peerDependencies": {
@@ -77,9 +86,9 @@
       "optional": true
     }
   },
-  "homepage": "https://github.com/KannaKuron/dsh-ide-git",
+  "homepage": "https://github.com/SteafShi/dsh-wsl-git#readme",
   "bugs": {
-    "url": "https://github.com/KannaKuron/dsh-ide-git/issues"
+    "url": "https://github.com/SteafShi/dsh-wsl-git/issues"
   },
   "icon": "./icon.svg"
 }

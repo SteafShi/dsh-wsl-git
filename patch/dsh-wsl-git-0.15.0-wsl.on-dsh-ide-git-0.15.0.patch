@@ -1,0 +1,3651 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+new file mode 100644
+index 0000000..d5489ba
+--- /dev/null
++++ b/CHANGELOG.md
+@@ -0,0 +1,195 @@
++# Changelog
++
++This file records changes against the upstream baseline. The baseline's own
++documentation is preserved verbatim as [README.upstream.md](README.upstream.md)
++and [README.upstream.en.md](README.upstream.en.md).
++
++**Baseline:** [`dsh-ide-git@0.15.0`](https://registry.npmjs.org/dsh-ide-git/-/dsh-ide-git-0.15.0.tgz)
++— MIT, Copyright (c) 2026 KannaKuron.
++
++---
++
++## 0.15.0-wsl — rebased onto upstream 0.15.0
++
++The first release on the **0.15.0** baseline (0.14.0 was built on 0.13.5). The
++panel is still the baseline's, unmodified, and the WSL execution layer is
++unchanged — what this release adds is the reconciliation with everything upstream
++changed in between, plus the mapping direction that reconciliation turned out to
++require.
++
++### Added — the argument direction of the path contract
++
++Upstream 0.15.0 introduced **two calls that pass an ABSOLUTE path as a git
++argument**, where every earlier call only ever read one back from git's output:
++
++| Upstream call | What it passes |
++|---|---|
++| `clone` (new in 0.15.0) | the target directory, as `git clone <url> <dir>` |
++| `diff` with `untracked: true` (new in 0.15.0) | the file, as `git diff --no-index -- /dev/null <file>` |
++
++`hostPathOf` maps git's *output* into the host spelling; these needed its
++**inverse**. Handing the distribution's git the Windows or UNC spelling of a path
++inside its own filesystem names nothing, and the failure is quiet — an empty
++patch, or a `not a git repository` about a directory that is one.
++
++- `linuxPathOf` in `src/target.js` — pure, beside its inverse, returning `null`
++  when a path has no spelling this world can open (another distribution's
++  filesystem) so the caller can refuse it by name.
++- `linuxSpellingOf` in `src/index.js` — the throwing form, for the two callers.
++- `clone` and the untracked-`diff` branch now spell their argument the way the
++  world that runs git spells it. The untracked branch uses **one** spelling for
++  both the argument and the header rewrite, which matches it literally; using two
++  would have left an absolute path in the preview's header.
++- 3 new assertions, including the invariant that makes a rebase safe:
++  `linuxPathOf(host spelling) === what git itself reported`.
++
++### Added — carried from upstream 0.15.0
++
++The rebase brings in everything upstream shipped between the two baselines, with
++the WSL layer applied to each: two-phase changes (`stats` / `statsDeferred`,
++which skips the two `numstat` passes and fetches them separately), concurrent
++read chains in `summary`, the untracked-file diff preview, the `clone` method,
++the bounded "Git output" ring buffer (`gitLogs`, `GIT_LOG_MAX_ENTRIES = 200`) and
++the immersive conversation seat. The ring buffer names the world a run happened
++in — `[Ubuntu-24.04] status --porcelain` — because the same git arguments now
++mean different programs, and that is the first question a bug report asks.
++
++### Changed
++
++- Rebased onto `dsh-ide-git@0.15.0`; `README.upstream.md` and
++  `README.upstream.en.md` are re-synced with that baseline (verified identical to
++  the published tarball).
++- Version `0.15.0-wsl` in `package.json` and `dsh.plugin.json`.
++
++### Verification
++
++- 38 assertions (`node --test tests/target.test.mjs`), up from 35.
++- The live run now checks the argument direction end to end: a real
++  `git diff --no-index -- /dev/null <absolute>` inside the distribution, plus the
++  cross-check of `linuxPathOf` against git's own `--absolute-git-dir` output.
++- The ~40 untouched call sites still pass through one spawn path, so the
++  reconciliation is confined to the 5 output sites and the 2 argument sites.
++
++### Known issue (not fixed here)
++
++This machine intermittently stalls a `wsl.exe` launch. Measured: a call typically
++returns in **256–300 ms** (stable across idle gaps of 25 s and across bursts), yet
++three runs out of roughly ten saw a single call exceed the 30 s per-call deadline
++and land as `git-timeout` — on `rev-parse` and `rev-list`, i.e. on trivial calls.
++It is **not** concurrency (9 concurrent calls: 420–494 ms, no stall) and **not**
++idle-wakeup (first call after 25 s idle: 256–300 ms), and it does not reproduce on
++demand. It is recorded rather than papered over: no retry or timeout tuning was
++shipped for a condition that could not be reproduced, because a speculative fix
++for an unknown stall is more likely to hide it than to cure it.
++
++---
++
++## 0.14.0 — WSL execution
++
++First release of this patch, on the `dsh-ide-git@0.13.5` baseline. The panel is
++the baseline's, unmodified; the change is where `git` runs.
++
++### Added
++
++- **WSL execution world.** `git` runs inside the distribution the session
++  workspace belongs to, addressed as
++  `wsl.exe -d <distro> [-u <user>] -e env GIT_* <git> -C <linuxPath> <args…>`.
++  The distribution is resolved from the workspace path — a WSL UNC path names its
++  own distribution — so no configuration is required and one install serves every
++  distribution.
++- `src/target.js` — pure functions: WSL UNC parsing, `linuxToHost` /
++  `hostToLinux` translation, registry lookup by longest containing key, and target
++  resolution with a `source` field so the reason a target resolved is observable.
++- `src/wsl-git.js` — pure functions: the `wsl.exe` argv, the spawn spec, and the
++  failure classifiers.
++- `hostPathOf()` in `src/index.js`, applied at the **five** sites where git
++  defines an output field as an absolute path: `repoRootOf` (`--show-toplevel`),
++  `worktreesOf` (`worktree list`), `operationOf` (`--absolute-git-dir`),
++  `collectSubmoduleRepos` (submodule `--show-toplevel`), and `scanRepos` (its own
++  discovery `--show-toplevel`).
++- Client-side `distroOf`, `displayPath` and `workspaceLocation`, so labels show
++  `Ubuntu-24.04 · /home/you/proj` with the raw host path on hover.
++- Settings: `distro`, `user`, `gitPath` — all default empty, meaning "the
++  workspace decides". Configuration never overrides a workspace that names its
++  own distribution; it only covers a drive path that nothing registered.
++- `version` reports `world` (`wsl` | `local`) and a human-readable `target`.
++- `tests/target.test.mjs` — 35 assertions over the pure contract.
++- `scripts/acceptance.mjs` — read-only live run: the transport, the mapping loop,
++  and the panel's own HTTP route.
++
++### Changed
++
++- `runGit(cwd, args)` now resolves the execution world from `cwd` and delegates
++  to `runGitTarget(target, args)`. It remains the single spawn path, so the ~40
++  call sites in the baseline are untouched.
++- `requireAbsolute` **refuses** a Linux absolute path
++  (`cwd must be a host path …, not a Linux path`). The baseline accepted one and
++  `path.resolve('/home/x')` silently produced `C:\home\x`, a path that names
++  nothing — every later filesystem call missed without saying so.
++- `undoApply` reads every restored file back and compares hashes before reporting
++  success. Inside WSL those writes reach the repository through the 9P share, and
++  the snapshot is the user's only copy of the discarded bytes; on a mismatch it
++  throws and **leaves the undo entry on the stack** so the cause can be fixed and
++  the restore retried.
++- `baseName` / `dirName` normalize `\` to `/` before splitting. The baseline split
++  on `/` alone, so a UNC repository root came back as a name that was the entire
++  path.
++- Identifiers renamed across both halves (41 occurrences): plugin id, route
++  prefix (`/dsh-wsl-git/api`), `API_BASE`, `TAB_ID`, `NATIVE_ID`,
++  `SETTINGS_BUNDLE`, `LOCALE_NS`, every localStorage prefix and every effect/log
++  label. The cordis row id is `wsl-git`, not `ide-git`: settings are persisted
++  under the row id, so sharing it would make the two plugins read and write one
++  document.
++- `files` in `package.json` lists the whole `src/` directory. The baseline listed
++  `src/index.js` and `src/client.js` individually, which would drop this patch's
++  new modules from a packed install.
++- Routes, methods, request bodies and the client contract are otherwise
++  unchanged: `cwd`, `repoRoot` and `paths` keep their meaning, and every path
++  crossing the boundary is still the host spelling.
++
++### Fixed (relative to the baseline's behaviour in a WSL workspace)
++
++- An unregistered distribution is reported as `wsl-distro-missing` instead of
++  `not a git repository`.
++- An unhealthy WSL service is reported as `wsl-launcher`, carrying the
++  locale-independent `Wsl/…` code.
++- git missing inside the distribution is reported as `git-missing`, naming the
++  distribution and how to install it.
++- A merge, rebase, cherry-pick, revert or bisect in progress inside a WSL
++  repository is detected again. The baseline's `existsSync` ran against a Linux
++  git directory path, which on Windows names nothing, so the check silently
++  answered "no operation in progress".
++- Repository discovery works in a WSL workspace at all: the baseline handed
++  Windows git a UNC path it cannot use as a working tree.
++
++### Unchanged
++
++The panel UI and layout algorithm; the commit graph; the branch tree; the change
++list; the diff viewer; the context menus; the "send to chat" wiring; the AI
++commit-message feature; all 21 locale dictionaries; and every safety semantic —
++confirmation guards, per-repository write serialization, the undo stack,
++protected branches, and argument validation.
++
++### Compatibility
++
++- `engines.dsh` and the `@deepseek-ai/dsh` peer range are inherited from the
++  baseline unchanged.
++- `dsh-better-sidebar` stays an optional peer: without it the panel mounts into
++  DSH's native right sidebar.
++- Windows-only in effect. On a POSIX host every workspace resolves to the local
++  world and behaviour is the baseline's; the WSL code paths are unreachable.
++
++### Verification
++
++- `node --test tests/target.test.mjs` — 35 assertions, no WSL host required.
++- `node scripts/acceptance.mjs` — live: `git 2.43.0` inside Ubuntu-24.04 and
++  `git 2.25.1` inside Ubuntu-20.04, each toplevel mapping back to a host-readable
++  path that re-resolves to the same world, the git directory readable for
++  merge/rebase markers, and `version` / `repos` / `summary` / `branches` / `log` /
++  `stashList` / `undoList` answering 200 over the panel's own route.
++- Two development-time defects are pinned by positive/negative regression
++  assertions rather than left to the live run: a missing mapping in `scanRepos`
++  (measured as `repos` failing with `cannot run git: spawn git ENOENT` while every
++  method that already mapped its paths worked), and the negative control for it —
++  that a raw Linux path resolves to the LOCAL world, which is exactly the wrong
++  answer the missing mapping produced. See [FORK.md](FORK.md).
+diff --git a/FORK.md b/FORK.md
+new file mode 100644
+index 0000000..7d7a348
+--- /dev/null
++++ b/FORK.md
+@@ -0,0 +1,220 @@
++# dsh-wsl-git
++
++An IDE-grade Git tool window for DeepSeek Harness that runs `git` **inside the WSL
++distribution the session workspace belongs to**.
++
++Fork of [`dsh-ide-git`](https://github.com/KannaKuron/dsh-ide-git) 0.15.0 (MIT). The
++panel — branch tree, commit graph, changes, staging, commit detail, stash, tags, the
++AI commit message — is unchanged. What changed is the execution world of `git`.
++
++---
++
++## Why this fork exists
++
++The upstream plugin spawns the local `git` with `node:path`'s Windows semantics. For a
++WSL workspace that produced exactly two wrong answers, depending on where the
++repository lived:
++
++| Repository | What the upstream panel did |
++|---|---|
++| on the distribution's own filesystem (`/home/you/proj`) | handed Windows git the workspace path as a UNC path it cannot use as a working tree → **"not a git repository"** for a repository that exists |
++| on a Windows drive (`/mnt/c/...`) | read the repository, but with the **Windows** git: WSL-side configuration, credentials and hooks did not apply |
++
++Measured before the fork, through the panel's own route on this machine:
++
++```
++POST /dsh-ide-git/api/repos   {"cwd":"\\\\wsl.localhost\\Ubuntu-24.04\\home\\steaf\\workspace\\device_xcar_1.0"}
++→ {"ok":false,"error":{"code":"not-a-repo","message":"not a git repository: …"}}
++```
++
++The repository is real: `git rev-parse --show-toplevel` answers
++`/home/steaf/workspace/device_xcar_1.0` inside the distribution.
++
++---
++
++## The design
++
++### The path contract
++
++**Every path that crosses the HTTP boundary — in either direction — is spelled the way
++the HOST names it**, which is the same spelling DSH stores as the session workspace.
++A Linux path lives only inside the spawn boundary.
++
++That is what keeps `sameDirectory`, `pathIdentity`, the repository picker and the
++client's per-session remembered repository all comparing one identity, and it is why
++the client never has to know which world it is talking to.
++
++```
++session workspace  \\wsl.localhost\<distro>\<linux>      (or  C:\… for a /mnt workspace)
++   │  client scope.cwd  →  POST cwd / repoRoot
++   ▼
++requireAbsolute  ── refuses a Linux path BY NAME (path.resolve('/home/x') would
++   │                 silently become C:\home\x, a path that names nothing)
++   ▼
++resolveTarget(cwd)  ──┬─► local : spawn('git', …)                unchanged from upstream
++                      └─► wsl   : spawn('wsl.exe', -d <distro> … -e env GIT_* git -C <linux> …)
++                                     │
++                                     ▼
++                          only the 5 fields git defines as ABSOLUTE are mapped back:
++                          --show-toplevel · --absolute-git-dir · worktree list ·
++                          submodule --show-toplevel · scanRepos' own toplevel
++```
++
++Rewriting a whole stdout stream instead would corrupt file content: a diff body may
++legitimately contain an absolute Linux path.
++
++### Which distribution — the workspace decides
++
++Nothing is hard-coded, which is what makes one install serve every distribution:
++
++1. **A WSL UNC path names its own distribution.** `\\wsl.localhost\Ubuntu-24.04\…` →
++   `Ubuntu-24.04`. Nothing else is consulted; configuration never overrides this.
++2. **A registered drive workspace** belongs to the distribution in
++   `<DSH_HOME>/wsl-workspaces.json` (`dsh-wsl-workspace` writes it), at its
++   `/mnt/<drive>` spelling.
++3. **A configured `distro`** covers a drive path nothing registered. Off by default.
++4. **Anything else is local**: the Windows `git`, byte-for-byte as upstream ran it.
++
++The registry lookup is by **containment** (the longest registered key that contains the
++path), not equality. Discovery resolves the *workspace*, but nearly every later call
++passes the *repo root* git reported — the workspace itself, a subdirectory of a
++container workspace, or a submodule at any depth. An equality-only lookup misses there
++and the miss is silent: a drive path would drop back to the Windows git, and a UNC path
++would lose the workspace's configured Linux user.
++
++### The two spellings of a Linux path
++
++```js
++linuxToHost(p, distro) = mntToWindowsPath(p) ?? joinUnc(distro, p)
++```
++
++The split is not cosmetic. The 9P share that serves `\\wsl.localhost\…` covers only the
++distribution's **ext4** volume; a drvfs mount answers Access denied there — measured on
++this machine:
++
++```
++readdirSync('\\\\wsl.localhost\\Ubuntu-24.04\\mnt\\c')  → EPERM
++readdirSync('C:\\')                                     → 34 entries
++```
++
++So `/mnt/<drive>/…` must travel as its drive letter, which is also how DSH registers a
++`/mnt` workspace in the first place.
++
++### The transport
++
++```js
++['wsl.exe', '-d', <distro>, ?('-u', <user>), '-e', 'env',
++ 'GIT_TERMINAL_PROMPT=0', 'GIT_OPTIONAL_LOCKS=0',
++ <git>, '-C', <linuxPath>, ...gitArgs]
++// child cwd: %SystemRoot%   — never the UNC workspace
++// child env: WSL_UTF8=1     — or wsl.exe answers in UTF-16
++```
++
++Three decisions, each with a reason:
++
++* **`-d` is never omitted.** This machine's default distribution is Ubuntu-20.04 while a
++  workspace under test is Ubuntu-24.04; letting `wsl.exe` choose runs the wrong git
++  against the wrong filesystem.
++* **`git -C <dir>`, not `wsl.exe --cd <dir>`.** `--cd` needs a new enough `wsl.exe`;
++  `-C` needs only git. It also keeps the whole call an argv array with **no shell**, so a
++  commit message containing a quote, a newline or a `$` crosses the boundary as data.
++  (`dsh-wsl-tool` and `dsh-wsl-workspace` use `-e bash -lc`/`--cd`; both shapes work —
++  this one is chosen for the argv guarantee.)
++* **The git environment travels as `-e env KEY=VALUE`**, not through `WSLENV`. That keeps
++  the mutation local to one call instead of editing a variable the user and every other
++  plugin share.
++
++### Failures are named
++
++The whole point of the fork: a failure of the **launcher** must never be read as git's
++answer about the repository.
++
++| Situation | Upstream said | This says |
++|---|---|---|
++| distribution not registered | `not a git repository` | `wsl-distro-missing` — names the distribution, suggests `wsl -l -v` |
++| WSL service unhealthy | `not a git repository` | `wsl-launcher` — carries the locale-independent `Wsl/…` code |
++| git not installed in the distribution | `not a git repository` | `git-missing` — names the distribution and how to install it |
++| `cwd` is a Linux path | silently resolved to `C:\home\…` | `bad-request` — refused by name |
++
++---
++
++## Layout
++
++| Path | Role |
++|---|---|
++| `src/target.js` | pure: UNC parsing, both path mappings, registry lookup, target resolution |
++| `src/wsl-git.js` | pure: the argv, the spawn spec, failure classification |
++| `src/index.js` | the HTTP surface; the ONE spawn path (`runGitTarget`) and the absolute-path mapping sites |
++| `src/client.js` | the panel (upstream) + `displayPath`/`workspaceLocation` and a separator-aware `baseName` |
++| `tests/target.test.mjs` | 35 pure assertions — the decisions |
++| `scripts/acceptance.mjs` | the live run — the transport, the mapping, and the HTTP surface |
++
++Dependency direction is one-way: `index.js` → {`target.js`, `wsl-git.js`} → node builtins.
++
++---
++
++## Verify
++
++```bash
++node --test tests/target.test.mjs     # the decisions (no WSL host needed)
++node scripts/acceptance.mjs           # the live transport + the panel's own route
++node scripts/acceptance.mjs --workspace '\\wsl.localhost\Ubuntu-24.04\home\you\proj'
++```
++
++`scripts/acceptance.mjs` is read-only — no method it calls mutates a repository. It
++discovers the WSL workspaces DSH has registered, so on a machine that has them it needs
++no arguments; the HTTP half is skipped when the harness is not reachable.
++
++---
++
++## Install / remove
++
++```powershell
++$dsh = "C:\Users\<you>\AppData\Local\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
++& $dsh plugin --profile desktop add "link:<this directory>"
++```
++
++`link:` (rather than `file:`) symlinks the package, so edits to either half are live —
++the client half after a page refresh, the host half after a restart (see below).
++
++### The host half does not hot-reload
++
++DSH picks up a newly added bundle without a restart, but **editing an already-mounted
++host module does not re-import it** — measured: a fix to `src/index.js` stayed invisible
++to the running host while the same route answered from the new code after a restart.
++Reload it from the app: **Settings → Plugins → Restart now**, or toggle this plugin off
++and on. The client half only needs a page refresh.
++
++### Remove the upstream plugin
++
++Both plugins register their own Git tab. Leaving `dsh-ide-git` bundled shows two Git
++tabs, and one of them is broken in a WSL workspace. Remove it once this one is verified:
++
++```powershell
++& $dsh plugin --profile desktop remove dsh-ide-git
++```
++
++Reverting is `add dsh-ide-git` again — the profile's `package.json`, `cordis.patch.yml`
++and `pnpm-lock.yaml` are backed up beside themselves as `*.dsh-wsl-git-backup-<stamp>`.
++
++---
++
++## Known limits
++
++* **Upstream is followed by hand.** This release is rebased onto 0.15.0. Upstream
++  changes after that are not merged automatically, and the part a rebase can
++  silently invalidate is named in [PUBLISHING.md](PUBLISHING.md): a new upstream
++  call that passes or reports an ABSOLUTE path needs a mapping, and the two
++  argument-direction sites upstream 0.15.0 introduced are why.
++* **Host-side filesystem access goes over 9P** for an ext4 repository: repository
++  discovery (`findNestedRepos`, depth 2) and the discard-undo snapshots read through
++  `\\wsl.localhost\…`. Measured on this machine that is cheap — `existsSync` 2–3 ms,
++  `realpathSync` 7–9 ms, a 22-directory `.git` scan 44 ms — so the scan was deliberately
++  left on the host. A workspace with far more entries would be the case to re-measure.
++* **The discard undo verifies its own writes.** `undoApply` reads every restored file
++  back and compares hashes, because inside WSL those writes land through the 9P share and
++  the snapshot is the user's only copy of the discarded bytes. On a mismatch it throws and
++  **leaves the undo entry on the stack**, so the cause can be fixed and the restore retried
++  instead of the bytes being lost to a consumed handle.
++* **`version` gained `world` and `target`.** Superset of the upstream response; the
++  panel's own client does not call it.
+diff --git a/NOTICE b/NOTICE
+new file mode 100644
+index 0000000..7576c8e
+--- /dev/null
++++ b/NOTICE
+@@ -0,0 +1,65 @@
++================================================================================
++dsh-wsl-git — a modified copy of dsh-ide-git
++================================================================================
++
++This software is a modified version of dsh-ide-git 0.15.0.
++
++  Upstream   dsh-ide-git
++  Copyright  Copyright (c) 2026 KannaKuron
++  License    MIT
++  Source     https://github.com/KannaKuron/dsh-ide-git
++  Baseline   https://registry.npmjs.org/dsh-ide-git/-/dsh-ide-git-0.15.0.tgz
++
++  Fork       dsh-wsl-git
++  Copyright  Copyright (c) 2026 SteafShi
++  Source     https://github.com/SteafShi/dsh-wsl-git
++  Patch      patch/dsh-wsl-git-0.15.0-wsl.on-dsh-ide-git-0.15.0.patch
++
++The upstream copyright notice and the MIT permission notice are retained
++verbatim in LICENSE, as that license requires. Every copy or substantial
++portion of this software must include both LICENSE and this NOTICE.
++
++Modifications relative to the baseline
++--------------------------------------------------------------------------------
++
++The full, file-level list is in CHANGELOG.md; the design rationale and the
++measurements behind it are in FORK.md. In summary:
++
++  * git executes inside the WSL distribution the session workspace belongs
++    to, chosen from the workspace path itself (a WSL UNC path names its own
++    distribution) rather than from any configuration.
++  * New pure modules: src/target.js (distribution resolution and bidirectional
++    path translation) and src/wsl-git.js (the wsl.exe argv, the spawn spec and
++    failure classification). No baseline module was replaced.
++  * The host half maps the absolute paths git reports back into the host
++    spelling at the five sites where git defines such a field, and refuses a
++    Linux path at the HTTP boundary instead of resolving it to a drive-relative
++    path that names nothing.
++  * Launcher-level failures are classified and named rather than being served
++    as "not a git repository".
++  * Identifiers were renamed so both plugins can coexist in one profile without
++    sharing a route, a tab id, a locale namespace, a settings row or a
++    localStorage prefix (41 occurrences across the two halves).
++
++UNCHANGED from the baseline
++--------------------------------------------------------------------------------
++
++  * The panel's user interface: layout algorithm, commit graph, branch tree,
++    change list, diff viewer, context menus, "send to chat" wiring.
++  * All 21 locale dictionaries.
++  * The AI commit-message feature.
++  * The safety semantics: confirmation guards, per-repository write
++    serialization, the undo stack, protected branches, path validation.
++  * The upstream documentation, kept verbatim as README.upstream.md and
++    README.upstream.en.md.
++
++Third-party components
++--------------------------------------------------------------------------------
++
++  dsh-wsl-workspace   registry format read at <DSH_HOME>/wsl-workspaces.json,
++                      and the WSL path conventions reimplemented (not imported)
++                      in src/target.js. Ported helpers are marked as such.
++  dsh-better-sidebar  optional peer; the tab host when installed.
++  dsh-ide-git         the baseline this is a patch on.
++
++================================================================================
+diff --git a/PUBLISHING.md b/PUBLISHING.md
+new file mode 100644
+index 0000000..c4ec1d9
+--- /dev/null
++++ b/PUBLISHING.md
+@@ -0,0 +1,128 @@
++# Releasing
++
++Maintainer notes. Everything here was checked on the machine this release was cut
++on; the caveats are ones that were actually hit rather than anticipated.
++
++**The distribution channel is GitHub, not npm.** npm publishing was dropped, so
++this file describes the GitHub flow and nothing else.
++
++## Pre-flight
++
++```sh
++node --test tests/target.test.mjs     # 38 pure assertions
++node scripts/acceptance.mjs           # live: transport, both mapping directions, the HTTP route
++git status --porcelain                # must be empty
++```
++
++Then confirm the surface that ships, by listing it rather than trusting the list:
++
++```sh
++tar -tzf dsh-wsl-git-0.15.0-wsl.tgz | sort
++```
++
++## How users install it
++
++```sh
++dsh plugin --profile desktop add github:SteafShi/dsh-wsl-git
++# pinned to a release, which is what a bug report should quote:
++dsh plugin --profile desktop add github:SteafShi/dsh-wsl-git#v0.15.0-wsl
++```
++
++pnpm resolves the **default branch** for an unpinned spec, so whatever is on
++`main` is what an unpinned user gets. Cut a tag per release.
++
++## ⚠️ Credentials: the cached account cannot write to this repository
++
++Measured, on the first push attempt:
++
++```
++remote: Permission to SteafShi/dsh-wsl-git.git denied to Neptune-steaf.
++fatal: unable to access 'https://github.com/SteafShi/dsh-wsl-git.git/': The requested URL returned error: 403
++```
++
++Git Credential Manager holds a credential for a **different GitHub account**
++(`Neptune-steaf`), which has no write access to `SteafShi/dsh-wsl-git`. Reading the
++repository works — it is public — so `git ls-remote` succeeds and the failure only
++appears on push. Re-authenticate as the repository's owner before pushing:
++
++```powershell
++git credential-manager github logout        # or: git credential reject, then re-auth
++git push -u origin main                     # GCM prompts for the SteafShi account
++```
++
++A fine-grained PAT with *Contents: read and write* on this repository also works,
++and is the better option on a machine shared by several accounts:
++
++```powershell
++git remote set-url origin https://<user>:<token>@github.com/SteafShi/dsh-wsl-git.git
++```
++
++## Network
++
++`github.com` resolves to `198.18.0.30` here — a benchmarking range, i.e. a
++transparent local proxy — and requests through it are **occasionally flaky**: one
++`fetch` to `github.com` failed outright while the next succeeded, and
++`registry.npmjs.org` was unaffected. `git ls-remote` and `git fetch` both worked.
++Retry a failed network step once before diagnosing it.
++
++## Cutting a release
++
++1. **Version in both places.** `package.json` and `dsh.plugin.json` carry it
++   independently (the baseline shipped them in sync; keep them that way).
++2. **Regenerate the patch**, because it must reproduce the package byte for byte.
++   The procedure is in [`patch/README.md`](patch/README.md); change one shipped
++   file and the old patch stops matching.
++3. **Verify the patch by result, not by exit code**: apply it to a pristine
++   baseline and compare every file's SHA-256 against the working tree. A patch
++   that applies cleanly but lands different content is the failure worth catching.
++4. Update [`CHANGELOG.md`](CHANGELOG.md).
++5. Commit. The history is deliberately two commits per baseline — the pristine
++   upstream release, then this fork — so `git diff` between them *is* the patch.
++6. Tag and push.
++
++```sh
++git tag -a v0.15.0-wsl -m "dsh-wsl-git 0.15.0-wsl (baseline dsh-ide-git 0.15.0)"
++git push origin main --follow-tags
++```
++
++## Which files ship
++
++`package.json`'s `files` decides. Two entries matter more than they look:
++
++* **`src`** — the whole directory, not `src/index.js` + `src/client.js` the way the
++  baseline listed it. Listing files individually silently drops `src/target.js`
++  and `src/wsl-git.js` from a packed install, and the plugin then fails at load
++  with a bare module-resolution error. A `github:` install is not packed, so this
++  bites npm-style installs rather than GitHub ones — it was still fixed, because
++  the failure is invisible until someone packs it.
++* **`patch`** — the released patch travels inside the package, so the diff against
++  the baseline is always at hand. It cannot contain itself; see
++  [`patch/README.md`](patch/README.md).
++
++## Rebasing onto a newer upstream
++
++This release is rebased onto **0.15.0** (it was 0.13.5 before). Upstream will move
++again, and a rebase is a normal maintenance task rather than an accident. A
++three-way merge does most of it:
++
++```sh
++git merge-file -p <new upstream>/src/index.js <old upstream>/src/index.js <this repo>/src/index.js
++```
++
++Then **re-confirm the path-contract sites are still the complete set.** That is
++the part a rebase invalidates silently, and it has two directions now:
++
++```sh
++grep -n 'show-toplevel\|absolute-git-dir\|requireAbsolute' src/index.js   # outputs + arguments
++```
++
++| Direction | Sites | Mapped by |
++|---|---|---|
++| git **reports** an absolute path | 5 — `repoRootOf`, `worktreesOf`, `operationOf`, `collectSubmoduleRepos`, `scanRepos` | `hostPathOf` |
++| an absolute path is passed as an **argument** | 2 — `clone`, the untracked `diff --no-index` | `linuxSpellingOf` |
++
++Both lists are also in [CHANGELOG.md](CHANGELOG.md) and [FORK.md](FORK.md). A
++baseline that adds either kind reintroduces the exact defect this fork's
++regression tests pin, so extend `tests/target.test.mjs` with the new site rather
++than only fixing the symptom. The argument direction was found exactly this way
++when rebasing onto 0.15.0, which had added both of its two sites.
+diff --git a/README.md b/README.md
+index b2dee2d..6dce3ba 100644
+--- a/README.md
++++ b/README.md
+@@ -1,176 +1,232 @@
+-# dsh-ide-git
++# dsh-wsl-git
+ 
+-[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
++**在 WSL 发行版内执行 `git` 的 IDE 级 Git 工具窗口 —— 作为 [dsh-ide-git](https://github.com/KannaKuron/dsh-ide-git) 0.15.0 的 fork 补丁发布。**
+ 
+-简体中文 | [English](README_EN.md)
++[![baseline](https://img.shields.io/badge/baseline-dsh--ide--git%400.15.0-blue)](#相对-baseline-的改动)
++[![license](https://img.shields.io/badge/license-MIT-green)](#许可与署名)
+ 
+-> 给 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 的侧边栏装一个 **IDE 级的 Git 工具窗口**——左边分支树、中间提交图谱、右边变更与提交详情,操作方式对齐 JetBrains 系 IDE 的 Git 面板;以 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 原生 Tab 的形式注册,右侧栏与底部面板都能用;v0.13.0 起还可挂在**主对话区**(「对话 / 轨迹」旁边的 Git 标签页,设置里可关)。
++面板本身**未作改动**:分支树、提交图谱、变更与暂存、提交详情、逐行 diff、右键发送到对话、删除可撤回、动作条可配置、21 种界面语言——全部来自基线。唯一的区别是 **`git` 在哪里执行**:会话工作区属于哪个 WSL 发行版,就在那个发行版里跑。
+ 
+-DSH 自带的 Git 面板覆盖「暂存 / 提交 / 还原 / 看历史」;`dsh-ide-git` 补齐 IDE 用户习惯的那一层:**分支树 + 右键分支操作 + 提交图谱 + 提交详情 + 变更列表 + 提交框**。
++```
++基线  dsh-ide-git 0.15.0 (MIT, © 2026 KannaKuron)
++本件  0.15.0-wsl = 基线 + 一层 WSL 执行与路径翻译补丁
++```
+ 
+-## 它解决什么
++---
+ 
+-- **分支管理没有树**:内置面板只有一个分支下拉。这里给出 `HEAD(当前分支) / 本地 / 远程 / 标签` 的分组树,每个分支带 ahead/behind 角标、上游、worktree 占用标记(`W`)。
+-- **历史只是列表**:这里画出提交图谱(lane 拓扑 + 分支/标签 ref 徽章),支持加载更多与过滤(文本 / 哈希 / 作者)。
+-- **想看某个提交改了什么**:点提交直接进详情——作者、日期、完整提交信息、变更文件(含 +/− 行数),点文件看逐行 diff(红绿 + 行号 + hunk 高亮)。
+-- **想指给 AI 一段代码**:在 diff 窗里选中几行、右键,把「哪个文件哪几行」(附提交或工作区上下文)直接发进当前会话的输入框。
+-- **想比较分支**:分支右键即可与当前分支比较,结果按文件与提交数汇报。
+-- **操作要够全**:签出、从任意分支/提交新建分支、重命名、删除、合并到当前、变基当前到此、新建标签、cherry-pick、还原提交、重置(保留/丢弃)、fetch / pull --ff-only / push(确认后)。
++## 主要特点
+ 
+-## 效果
++### 一、`git` 在发行版内执行,而且发行版由工作区决定
+ 
+-> 下面这些图取自一个**只装了两个插件**(`dsh-better-sidebar` + 本插件)的干净 DSH,绑定在一个虚构的演示仓库上(见 `scripts/demo-repo.mjs`),画面里没有真实工作区、没有壁纸插件、也没有其它面板。
++这是本补丁存在的理由。DSH 把一个 WSL 工作区存成 UNC 路径,**那条路径自己就带着发行版名**,所以不需要任何配置:
+ 
+-<table>
+-<tr>
+-<td align="center" width="58%"><img src="docs/screenshots/1-bottom-workbench.png" alt="底部工作台:分支树 / 提交图谱 / 变更与提交"/></td>
+-<td valign="top"><b>底部工作台(宽扁 → 三栏)</b><br/>左列是 IDEA 式动作条:按<b>自身高度</b>决定放几个按钮,放不下的收进 <code>⋯</code>,末尾 <code>⚙</code> 可调顺序与显隐;中列是提交列表——列序与 IDEA 一致(<b>日期 → 提交人 → 图谱 → 分支标签 → 提交信息</b>),上方一排筛选(文本/哈希、分支或标签、提交人、日期、路径)与排序方向;右列是变更分组与提交框。</td>
+-</tr>
+-</table>
++| 工作区路径 | 解析结果 | 实际执行的 git |
++|---|---|---|
++| `\\wsl.localhost\Ubuntu-24.04\home\you\proj` | `Ubuntu-24.04` | 发行版内的 `git`(实测 `2.43.0`) |
++| `\\wsl.localhost\Ubuntu-20.04\home\you\proj` | `Ubuntu-20.04` | 发行版内的 `git`(实测 `2.25.1`) |
++| `C:\Users\you\proj`(未注册) | — | Windows `git`,与基线逐字节一致 |
+ 
+-<table>
+-<tr>
+-<td align="center" width="58%"><img src="docs/screenshots/2-commit-menu.png" alt="提交右键菜单"/></td>
+-<td valign="top"><b>提交右键</b><br/>详情、复制修订号、签出该修订、在此新建分支、新建标签、优选(Cherry-Pick)、还原提交、重置到此(保留/丢弃更改)——破坏性项标红,菜单在面板内定位,底部工作台里同样能弹出来。</td>
+-</tr>
+-<tr>
+-<td align="center" width="58%"><img src="docs/screenshots/3-branch-undo.png" alt="删除分支后的撤回浮窗"/></td>
+-<td valign="top"><b>删除可撤回</b><br/>删除分支/贮藏是<b>真删除</b>,但宿主在动手前记下了对象 id:右下角浮窗点「撤回」即可恢复(一次性、30 分钟内有效);错过浮窗还有顶栏的「最近可撤回的操作」入口。删除 <code>main</code>/<code>master</code> 需要输入分支名确认。</td>
+-</tr>
+-</table>
++一份安装服务任意多个发行版;**非 WSL 工作区行为完全不变**。选项 `distro` / `user` / `gitPath` 全部默认空,只在工作区说不出时兜底,永远不覆盖工作区。
+ 
+-<table>
+-<tr>
+-<td align="center" width="58%"><img src="docs/screenshots/4-rail-settings.png" alt="动作条设置:排序与显隐"/></td>
+-<td valign="top"><b>动作条可配置</b><br/>拖动或用箭头调整顺序、眼睛图标逐项显隐,配置只存「排列 + 隐藏」并做过归一化,以后新增动作不会打坏旧配置。</td>
+-</tr>
+-<tr>
+-<td align="center" width="58%"><img src="docs/screenshots/5-commit-detail.png" alt="提交详情与逐行 diff"/></td>
+-<td valign="top"><b>提交详情</b><br/>完整提交信息、作者与日期、变更文件列表(带 +/− 行数),点文件看逐行 diff(行号 + hunk 高亮 + 红绿底)。</td>
+-</tr>
+-</table>
++配置 `distro` 只在一种情况下生效:工作区是盘符路径、且注册表里没有它。默认关闭。
+ 
+-<table>
+-<tr>
+-<td align="center" width="58%"><img src="docs/screenshots/6-right-sidebar.png" alt="原生右侧栏里的同一面板"/></td>
+-<td valign="top"><b>同一个注册,两种布局</b><br/>窄而高的<b>原生右侧栏</b>改用堆叠布局:动作条铺成顶部一行、变更在先、提交列表随后——面板只量自己的尺寸,从不猜自己在哪个容器里。截图顺序、演示仓库与干净环境都由 <code>scripts/screenshots.mjs</code> 复现。</td>
+-</tr>
+-</table>
++### 二、失败会被点名,而不是伪装成"不是 git 仓库"
+ 
+-## 右键发送到对话
++这是基线在 WSL 下最容易误导人的地方。
+ 
+-面板里的一切都能右键塞进**当前会话的输入框**——走 DSH 官方的 composer 插入通道(不动你已输入的文字,追加在末尾;发送中或服务不在时自动退化为复制到剪贴板并提示,绝不死点击):
++| 情况 | 基线说 | 本件说 |
++|---|---|---|
++| 发行版未注册 | `not a git repository` | `wsl-distro-missing`,点名发行版并提示 `wsl -l -v` |
++| WSL 服务异常 | `not a git repository` | `wsl-launcher`,带与语言无关的 `Wsl/…` 错误码 |
++| 发行版内没装 git | `not a git repository` | `git-missing`,点名发行版并给出安装命令 |
++| `cwd` 是 Linux 路径 | 静默解析成 `C:\home\…`(指向空处) | `bad-request`,`cwd must be a host path …, not a Linux path` |
+ 
+-- **提交** → `git 提交 47ad017「提交标题」(仓库 xxx)`:短哈希 + 提交信息 + 仓库,一段话指名一个修订;
+-- **分支** → `git 分支 main(仓库 xxx)`;
+-- **文件**(变更列表与提交详情的文件行)→ 一个 `@路径` 文件引用 chip(DSH 原生 @ 语法,含空格的路径自动加引号),或者只发文件路径;
+-- **diff 选中行**:在提交详情或工作区变更打开的 diff 窗里**选中一段文本再右键** → 「发送选中行到对话」:`@文件` chip + 行号说明——提交场景是「第 N–M 行(提交 47ad017「标题」@ 当前分支)」,工作区场景是「第 N–M 行(工作区已暂存 / 未提交)」。行号由选区所在的 diff 行按 hunk 头换算成**新文件行号**;选中的全是删除行时用旧号并标注「旧行号」。选区落不到可定位的 diff 行上时,菜单退化为「发送选中片段到对话」(原文截断 600 字符),不编造行号;菜单里同时有「复制选中引用」。没有选区时右键保持浏览器默认菜单。
++### 三、路径按你思考的方式显示
+ 
+-配套已经就位的几件事:变更文件行与详情文件行的行首图标按扩展名着色(DSH 自家 FileTypeIcon);diff 预览用 DSH 自家 DiffBlock 组件渲染(红绿底、复制 / 换行工具栏,视觉与宿主一致);diff 窗高度可拖拽调节并按位置记忆;整个面板还可以挂进**主对话区**——「对话 / 轨迹」旁的 Git 标签页,插件设置里可关。
++仓库选择器显示 **`Ubuntu-24.04 · /home/steaf/workspace/device_xcar_1.0`** 而不是 `\\wsl.localhost\Ubuntu-24.04\home\…`;鼠标悬停可看原始宿主路径。仓库名也从"整条 UNC 路径"恢复成目录名。
+ 
+-## 挂在哪里:两个宿主,一个面板
++> 交互契约不变:请求里流转的路径**始终是宿主拼写**,与 DSH 给会话存的 cwd 同一种。客户端不需要知道自己在跟哪个世界说话。
+ 
+-本插件只注册一次,落到哪个面上由**宿主**决定,两条通道互斥:
++### 四、继承自基线的面板能力(未改动)
+ 
+-| 宿主 | 条件 | 你得到什么 |
+-|---|---|---|
+-| **dsh-better-sidebar**(底座,可选) | 装了它 | 它的 Tab 系统:右侧栏里的原生 Tab **加上底部工作台**;它的设置页 `侧边卡片` 里能看到本插件的卡片 |
+-| **DSH 原生右侧栏** | 没装底座时自动接管 | 右侧栏 Guide 页里的 **Git** 胶囊 → 点开就是同一个面板 |
+-| **主对话区标签页**(v0.13.0 起) | 总是可用(可在设置里关闭) | 会话顶部「对话 / 轨迹」旁多一枚 **Git** 标签,点它整块主对话区变成 Git 工具窗口;开关在插件设置 →「面板放置」 |
++| 区域 | 能力 |
++|---|---|
++| 分支 | `HEAD / 本地 / 远程 / 标签` 分组树、过滤、ahead/behind 角标、worktree 占用标记;右键签出 / 变基 / 合并 / 比较 / 新建 / 重命名 / 删除 / 更新 / 推送 |
++| 历史 | lane 拓扑提交图谱 + refs 徽章 + 分页(120/页);筛选:文本或哈希、分支或标签、提交人、日期、路径(服务端 `git log -- <path>`)、排序方向 |
++| 提交 | 详情(完整信息 / 作者 / 日期 / 变更文件 +/−)、逐行 diff(行号 + hunk 高亮 + 红绿底 + 复制 / 换行) |
++| 变更 | 冲突 / 已暂存 / 更改 / 未跟踪 四组;行内暂存 / 取消 / 丢弃;分组级全部暂存 / 取消;点击看 diff |
++| 提交框 | 多行信息、`Ctrl+Enter` 提交、`--amend` |
++| 发到对话 | 提交、分支、文件(`@路径` chip,含空格自动加引号)、**diff 选中行**(换算成新文件行号,删除行标旧行号)一键送进当前会话输入框 |
++| 安全 | 破坏性操作要 `confirm: true` + 二次确认;`main`/`master`/`trunk` 删除要输入分支名;同仓库写操作宿主串行;merge / rebase / cherry-pick / revert / bisect 未结束时相关动作置灰 |
++| 撤回 | 删除分支 / 删除贮藏 / 丢弃更改都留浮窗可撤回(按删除前记下的对象 id 重建,一次性、30 分钟有效) |
++| 布局 | 同一个注册自适应:底部工作台三栏、侧边栏纵向堆叠、主对话区标签页;靠 `ResizeObserver` 量容器,不猜 |
++| 语言 | 21 种词典,跟随 DSH 语言设置实时切换,缺键回退英文 |
+ 
+-底座在场时以它为准(它还带底部工作台);底座**晚到**会顶掉原生注册再挂到它那边。所以**只装本插件也能用**,没有任何前置要求。
++四个可挂载面(底座 Tab / 底部工作台 / DSH 原生右侧栏 / 主对话区标签页)、完整的动作条配置、撤销栈等细节见**[上游原文](README.upstream.md)**。
+ 
+-同一个面板会出现在形态完全不同的面上,所以布局靠量而不是猜:
++### 五、随基线 0.15.0 一并带来的能力
+ 
+-| 面 | 形态 | 本插件的布局 |
+-|---|---|---|
+-| 右侧栏(原生的,或底座桥接过来的) | 窄而高 | `stack`:变更区在提交历史之上,分支树可收起,详情/差异占满主区 |
+-| 底部工作台(底座自有) | 宽而扁 | `columns`:分支树 · 提交图谱 · 变更与提交框,三栏并排——就是 JetBrains Git 工具窗口的样子 |
++本件已 rebase 到 **0.15.0**,上游在这两个基线之间新增的功能**全部继承**,且每一项都已套用 WSL 执行层:
++
++| 能力 | 说明 |
++|---|---|
++| 两阶段变更 | `stats` / `statsDeferred`:先出变更行,`+/-` 数字随后单独取;树里变更上千项时不再一次算完 |
++| 并发读链 | `summary` 的独立查询并发执行(分支链因依赖仍顺序),只剩两条链的等待时间 |
++| 未跟踪文件预览 | 未跟踪文件也能看 diff —— 走 `git diff --no-index /dev/null <文件>` 生成真实的「新文件」补丁 |
++| Clone | 面板内从 URL 克隆到指定目录(父目录必须存在,git 自己保证目标非空则不覆盖) |
++| Git 输出视图 | 最近 200 次 git 调用的环形缓冲(VS Code 的 `scm showOutput` 等价物),**每条都标明执行世界**:`[Ubuntu-24.04] status --porcelain` |
++| 沉浸式对话席位 | 主对话区的沉浸布局开关 |
+ 
+-插件不猜自己在哪儿,而是用 `ResizeObserver` 量自己的容器:宽 ≥ 600px 且宽 ≥ 高 × 1.15 走三栏,否则走纵向堆叠(宽度说了算,高度没有否决权)。自由浮窗、移动端抽屉同样自适应。
++---
+ 
+-## 功能一览
++## 相对 baseline 的改动
+ 
+-| 区域 | 能力 |
++### 新增文件
++
++| 文件 | 作用 |
+ |---|---|
+-| 动作条 | IDEA 式左侧竖排(底部工作台)/ 顶栏下一行横排(右侧栏):刷新、新建分支、签出、删除、比较、显示差异、贮藏、新建标签、收藏、抓取、拉取、推送。**按可用空间自动决定放几个**,放不下的收进 `⋯ 更多`;末尾 `⚙ 设置` 可拖动排序、逐项显隐(存 `dsh-ide-git.rail.v1`)。每个按钮按当前状态点亮/置灰(没有其他分支就不能删除/签出/比较,没有远程就不能抓取/推送,没有上游就不能拉取,没有变更就没有差异可看) |
+-| 状态行 | 当前分支、上游、`↑ahead ↓behind`、stash 数量、忙碌指示 |
+-| 分支树 | `HEAD / 本地 / 远程 / 标签` 分组(可折叠)、过滤框、星标当前分支、ahead/behind 角标、worktree 占用标记;本地蓝 / 远程紫 / 标签黄 / HEAD 绿 |
+-| 分支右键 | 签出、将当前分支变基到此、合并到当前分支、与当前分支比较、从该分支新建分支、重命名、删除(当前分支禁用)、更新(Fetch)、推送、发送到对话(分支名 + 仓库) |
+-| 历史筛选 | 文本或哈希、分支或标签、提交人、日期(今天 / 近 7 天 / 近 30 天 / 今年),外加排序方向(新→旧 / 旧→新)与一键清除;路径筛选回车后由 git 服务端过滤(`git log -- <path>`) |
+-| 提交列表 | 列序对齐 IDEA:**日期 → 提交人 → 图谱 → 分支标签 → 提交信息**;lane 拓扑图整格连线(相邻行像素对齐)、HEAD 空心点、refs 徽章(HEAD 绿 / 本地蓝 / 远程紫 / 标签黄,最多 3 个 + `+n`)、加载更多(每页 120) |
+-| 提交右键 | 提交详情、复制修订号、签出该修订(确认)、在此新建分支、新建标签、cherry-pick、还原提交、重置到此(保留 / 丢弃更改)、发送到对话(短哈希 + 提交信息 + 仓库) |
+-| 提交详情 | 完整提交信息、作者/日期、变更文件列表(+/−),点文件看逐行 diff |
+-| diff 窗 | DSH 自家 DiffBlock 渲染(红绿底 + 复制/换行工具栏)、高度可拖拽调节并按位置记忆;**选中 diff 行右键**把行级引用发进对话——`@文件` + 第 N–M 行 + 提交(短哈希/标题/当前分支)或工作区(已暂存/未提交)上下文,删除行标注旧行号,选区定位不到行时发选中片段(截断 600 字符),另有「复制选中引用」 |
+-| 变更列表 | 冲突 / 已暂存 / 更改 / 未跟踪 四组,行内 暂存 / 取消暂存 / 丢弃,分组级「全部暂存 / 全部取消暂存」,点击行看 diff |
+-| 提交框 | 多行提交信息、`Ctrl+Enter`(macOS `Cmd+Enter`)提交、修补上次提交(`--amend`) |
+-| 文件右键 | 显示差异、暂存/取消暂存、丢弃更改、复制路径、发送到对话(`@文件` 引用 chip 或文件路径) |
+-| 安全与撤回 | 删除分支 / 删除贮藏后右下角弹提示条,点「撤回」即可恢复(真删除 + 按删除前记下的对象 id 重建,一次性、30 分钟内有效),顶栏的撤回图标里也能找到最近删除;`main`/`master`/`trunk` 的删除要求输入分支名确认,所有破坏性确认框焦点默认在「取消」;同一仓库的写操作在宿主串行执行;仓库里还有未结束的 merge / rebase / cherry-pick / revert / bisect 时,相关动作全部置灰并说明原因 |
++| `src/target.js` | 纯函数:UNC 解析、**双向**路径映射、注册表查找、执行世界解析 |
++| `src/wsl-git.js` | 纯函数:`wsl.exe` argv、spawn 规格、失败分类 |
++| `tests/target.test.mjs` | 38 条纯函数断言(含历史 bug 的正/反回归,以及逆映射与 git 自身输出一致的基准) |
++| `scripts/acceptance.mjs` | 真实传输 + 映射闭环 + **参数方向** + HTTP 面验收,只读 |
++
++### 修改的文件
++
++**`src/index.js`**
++
++| 改动 | 说明 |
++|---|---|
++| `runGit` → `runGitTarget` | 唯一的 spawn 出口按 `cwd` 解析执行世界;约 40 个调用点因此一行未改 |
++| 新增 `hostPathOf()` | git **输出**的绝对路径映射回宿主拼写,**5 处**:`repoRootOf`、`worktreesOf`、`operationOf`、`collectSubmoduleRepos`、`scanRepos` |
++| 新增 `linuxSpellingOf()` | **参数**方向的逆映射,用于上游 0.15.0 新增的 2 处:`clone` 的目标目录、`diff --no-index` 的文件。`diff` 那一处**参数与头部改写必须用同一个拼写**(否则预览头部会残留绝对路径) |
++| `requireAbsolute` | 拒绝 Linux 绝对路径(基线会静默变成 `C:\home\…`) |
++| `undoApply` | 写回后逐个文件读回比对哈希;不符即抛且**保留 undo 条目**以便重试 |
++| `version` | 增加 `world` / `target` 字段(超集,面板未调用) |
++| `gitLogs` | 环形缓冲的每条记录标明执行世界 |
++| Config | 新增 `distro` / `user` / `gitPath`,默认空;`apply(ctx, config)` 发布设置 |
++
++**`src/client.js`**
++
++| 改动 | 说明 |
++|---|---|
++| `baseName` / `dirName` | 先归一化 `\`→`/` 再切分:基线对 UNC 路径会把整条路径当名字返回 |
++| 新增 `distroOf` / `displayPath` / `workspaceLocation` | 仓库选择器显示发行版 + Linux 路径,悬停看原始宿主路径 |
++
++**`package.json` / `dsh.plugin.json` / `cordis.patch.yml`**
++
++包名、版本、描述;cordis 行 id `ide-git` → `wsl-git`(设置按行 id 持久化,共用会读写同一份文档);`files` 收录整个 `src/` —— 基线只列了 `src/index.js` 与 `src/client.js`,新增模块在打包式安装下会丢。
++
++**标识符改名**(两半共 41 处):插件 id、路由前缀 `/dsh-wsl-git/api`、Tab id、locale 命名空间、localStorage 前缀、全部 effect 标签与日志前缀。
++
++### 明确未改动
++
++面板 UI 与布局算法、21 种 i18n 词典、CSS、提交图谱算法、右键菜单与"发送到对话"链路、AI 提交信息链路、以及全部安全语义(确认守卫、仓库串行锁、撤回栈、受保护分支)——**逐字保留**。上游两个 README 原文保留为 `README.upstream.md` / `README.upstream.en.md`。
++
++### 关键设计决定
++
++1. **`-d` 从不省略。** 本机默认发行版与工作区所属发行版可能不同,交给 `wsl.exe` 选会跑错 git、读错文件系统。
++2. **`git -C <dir>`,不用 `wsl.exe --cd`。** `-C` 只要求 git,不要求 wsl.exe 的版本;而且整条命令是 **argv 数组、无 shell**,提交信息里的引号、换行、`$` 原样穿过边界。
++3. **git 环境用 `-e env KEY=VALUE` 注入**,不动 `WSLENV` —— 不修改你和其它插件共享的变量。
++4. **`cwd` 绝不用 UNC。** 用 UNC 工作目录启动 Windows 子进程是 Node/Windows 的已知缺陷;`git -C` 已经决定了 Linux 侧,Windows 侧只需一个真实存在的目录。
++5. **`WSL_UTF8=1` 是必需的**,否则 `wsl.exe` 用 UTF-16 输出,下游所有模式匹配都会失配。
++6. **`/mnt/*` 走盘符,ext4 走 UNC。** 9P 共享只服务 ext4,drvfs 经 UNC 读取会 `EPERM`(本机实测)。
++7. **只映射 git 输出里"定义为绝对路径"的字段**,不整段重写 stdout —— diff 正文里合法出现的绝对路径不能被改。
++
++完整设计与实测数据见 **[FORK.md](FORK.md)**。
++
++---
+ 
+ ## 安装
+ 
+ ```sh
+-# 本插件可以单独使用:面板直接出现在 DSH 原生右侧栏
+-dsh plugin --profile web add dsh-ide-git
+-# 可选底座:装了它才会多出底部工作台,并跟随它的侧栏布局
+-dsh plugin --profile web add dsh-better-sidebar
+-# 重启 dsh web
++# 从 npm
++dsh plugin --profile desktop add dsh-wsl-git
++
++# 从 git 仓库
++dsh plugin --profile desktop add github:SteafShi/dsh-wsl-git
++
++# 从本地目录开发(link,改动即时生效)
++dsh plugin --profile desktop add "link:/path/to/dsh-wsl-git"
+ ```
+ 
+-装好后打开任意会话:
++可选底座 `dsh-better-sidebar`(装了才有底部工作台;没装也能挂 DSH 原生右侧栏)。装完**重启宿主**。
+ 
+-- **只装本插件**:点会话头右侧的「打开右侧边栏」→ Guide 页里的 **Git** 胶囊 → 面板打开;
+-- **装了底座**:会话头右侧的面板开合按钮 → 面板 Tab 条右侧 `+` → 选 **Git**(底部工作台);原生右侧栏的 `+` → **Git**(同一注册,同一份状态);
+-- 底座在场时,它的设置页 **侧边卡片** 分区里也会出现本插件的卡片(标题 / id / 启用开关),随时停用。
++> ⚠️ **宿主半不会热重载。** 新增 bundle 会被立即识别,但**修改已挂载的宿主模块不会重新导入**——本机实测:改了 `src/index.js` 后同一路由仍返回旧代码。请用应用内「设置 → 插件 → 立即重启」或把插件关掉再打开。客户端半改动只需刷新页面。
+ 
+-### 兼容性
++**不要和 `dsh-ide-git` 同时启用**:两者各注册一个 Git 页签,而基线在 WSL 工作区里是坏的。
+ 
+-- `engines.dsh` 声明为 **`>=0.1.2-0`** ——0.1.2 起的全部版本都算,包括 `0.1.5-rc` / `0.1.6-alpha` 这类**预发布**(纯 semver 下预发布默认不匹配任何范围,所以起点写成了 `-0`)。**同一个值也是 `@deepseek-ai/dsh` 的 peerDependencies**:dsh 0.1.7 起会强制执行 peer 里的 `@deepseek-ai/dsh*` 范围(不满足就不加载),而 `engines` 没有任何读取方——写进 peer 才算数。范围是**开放下界、不封顶**,所以 0.1.7 起的任何宿主(含 rc / alpha 预发布)都不会因此被禁用;0.1.0–0.1.6 没有这套检查,完全不受影响。
+-- 只依赖三样长期契约:宿主半的 `webServer.register({ kind: 'prefix' })` 路由、客户端半的 `window.__ModuleLoader__.load({ id, factory })`、以及客户端的 `slots` 服务。**不引用 `ui-primitives` 图标集**(图标全是自带 SVG),所以宿主删改图标不会波及本插件。
+-- 底座是**可选** peer:没装、装坏了、或它自己要等上游修,都不影响本插件挂到原生右侧栏。
++---
+ 
+-### 界面语言
++## 验收
+ 
+-跟随 DSH 的语言设置(`ctx.locale`)实时切换,内置 **21 种**词典:简繁中文(含 `zh-HK` / `zh-MO` / `zh-TW`)、英语、日语、韩语、德语、法语、意大利语、葡萄牙语、俄语、荷兰语、波兰语、瑞典语、土耳其语、印尼语、越南语、泰语、印地语、阿拉伯语。词典同时注册进 DSH 的 locale 注册表(`ctx.locale.register`);解析顺序是「精确 tag → 主语言子标签 → 英文」,而**英文始终是键完整的那本**,所以任何未覆盖的语言都回退英文,不会露出键名。
++```sh
++node --test tests/target.test.mjs     # 38 条:纯决策,不需要 WSL
++node scripts/acceptance.mjs           # 真实传输 + 映射闭环 + 面板自己的 HTTP 路由
++```
+ 
+-词典就在 `src/client.js` 的 `LOCALES` 表里:一门语言一个条目,条目前面有一行 `/* locale: <tag> */` 标记。**校验是自动的**——冒烟测试强制每本词典的键集与中文完全一致(缺键会静默回退英文,面板就成了半翻译状态,那正是这条测试要挡住的)。
++`scripts/acceptance.mjs` **只读**,不会改动任何仓库。它会自动发现 DSH 已注册的 WSL 工作区,所以有 WSL 工作区的机器上无需参数;harness 不可达时跳过 HTTP 部分。
+ 
+-## 工作原理
++本机验收结果(`acceptance.mjs`,全部通过):
+ 
+ ```
+-宿主半 src/index.js                       客户端半 src/client.js
+-  POST /dsh-ide-git/api/<method>            ctx.betterSidebar.registerTab({ id: 'dsh-ide-git:panel' })
+-  └─ spawn('git', argv, { cwd })            └─ Panel:ResizeObserver → columns / stack
+-     └─ 会话工作区 = cwd(客户端 scope.cwd 传入)
++Ubuntu-24.04  git 2.43.0 · toplevel 映射后宿主可 stat/readdir/readFile · 再解析回同一世界 · git 目录可读(merge/rebase 标记)
++Ubuntu-20.04  git 2.25.1 · 同上
++HTTP 面       version/repos/summary/branches/log/stashList/undoList 全 200
++              未注册发行版 → wsl-distro-missing;Linux 路径 → bad-request
+ ```
+ 
+-- **宿主半**:一个前缀路由 `/dsh-ide-git/api`,方法表 32 个(`summary` / `branches` / `log` / `commitDetail` / `diff` / `compare` / `stage` / … / `push` / `tagDelete` / `version`)。所有 git 调用都是 **argv 数组 + `spawn`**(没有 shell 字符串、没有 `exec`),参数先过校验(绝对路径、ref 不以 `-` 开头、无控制字符、路径不越出仓库)。
+-- **客户端半**:无构建、单文件、`window.__ModuleLoader__.load({ id, factory })` 包装,只 `require('react')`(DSH 客户端基线模块白名单内)。
+-- **信任围栏**:路由挂在 DSH 自己的 web server 上,天然同源;只有 Host 为 loopback,或浏览器标记 `Sec-Fetch-Site: same-origin/same-site` 的请求才会被服务。
+-- **破坏性操作**:`push` / 硬重置 / 强制删分支 / 丢弃未跟踪文件 / 删除 stash 都必须显式 `confirm: true`,UI 侧一律弹二次确认。
++---
+ 
+-## 限制与路线图
++## 已知限制
+ 
+-- **v0.1.0 只覆盖主路径**:分支树 + 图谱 + 变更 + 提交 + 详情 + 常用分支/提交操作。下面的还在路上:
+-  - 变更/提交的**多选与批量操作**、按文件部分提交(类似 IDEA 的 Changelist);
+-  - 交互式变基(`rebase -i`)、fixup/squash、补丁(format-patch/apply);
+-  - 三方合并冲突编辑器、冲突解决动作(接受本地/远端);
+-  - blame / 文件历史视图、行级注释;
+-  - 设置页的插件自有开关(提交后自动刷新、diff 上下文行数等);
+-  - worktree 视图(当前只在分支行标注占用)。
+-- **只面向 `web` profile**:`dsh.client.platform` 为 `web`;桌面客户端的 renderer 复用同一套 shell 资产,但尚未真机验证。
+-- **不写 `.git`**:所有操作都通过 `git` 命令走正常索引/引用,插件不直接改 `.git` 内部文件。
+-- **大仓库**:提交列表分页(120/页),diff 输出上限 400KB(超出截断并标记)。
++- **上游需手动跟进。** 本件已 rebase 到基线 0.15.0;上游此后的改动不会自动合并——[PUBLISHING.md](PUBLISHING.md) 记着 rebase 流程,以及 rebase 时**必须重新确认**的那份「绝对路径点」清单。
++- **宿主侧文件访问走 9P**(ext4 仓库):仓库发现与丢弃撤回的快照都读 `\\wsl.localhost\…`。本机实测很便宜(`existsSync` 2–3 ms、`realpathSync` 7–9 ms、22 目录扫 `.git` 44 ms),所以仓库发现**有意**留在宿主;条目多得多的容器工作区值得重新测量。
++- **丢弃撤回会校验自己的写入** —— 快照是用户手上唯一一份被丢弃的字节,写不进就抛错并保留撤回条目,而不是假装成功。
++- **`/mnt/<盘>` 工作区**需要 dsh-wsl-workspace 先把发行版写进 `<DSH_HOME>/wsl-workspaces.json`;没有该记录时按普通 Windows 工作区处理。
++- 面板功能本身的路线图(多选批量、交互式变基、冲突编辑器、blame、worktree 视图)沿用上游,见 [上游原文](README.upstream.md)。
+ 
+-## 开发
++---
+ 
+-```sh
+-npm test      # 两层:smoke(文件级:清单一致性、客户端包装、白名单、确认守卫、方法表)
+-              #      + api(临时真实仓库直驱宿主路由:解析、暂存/提交/分支/标签/stash、全部守卫与信任围栏)
+-```
++## 许可与署名
+ 
+-本机联调:把仓库加到 web profile 后重启 `dsh web`;客户端半改动由 DSH 热加载,宿主半改动需要重启。
++MIT。`LICENSE` 逐字保留基线原文与版权声明,未作任何改动:
+ 
+-## 许可
++```
++MIT License · Copyright (c) 2026 KannaKuron
++```
+ 
+-MIT © KannaKuron
++本补丁的署名与出处记在 `NOTICE`,分发的副本必须同时保留 `LICENSE` 与 `NOTICE`。
++
++| | |
++|---|---|
++| **基线** | [dsh-ide-git](https://github.com/KannaKuron/dsh-ide-git) 0.15.0 — MIT, © 2026 KannaKuron |
++| **本 fork** | [dsh-wsl-git](https://github.com/SteafShi/dsh-wsl-git) 0.15.0-wsl — MIT, © 2026 SteafShi |
++| **基线↔本件** | [`patch/dsh-wsl-git-0.15.0-wsl.on-dsh-ide-git-0.15.0.patch`](patch/README.md)(该补丁已实测:打到纯净 0.15.0 上得到的 27 个文件与本包逐字节一致) |
++| **依赖的兄弟插件** | [dsh-wsl-workspace](https://github.com/dsh-wsl-workspace-maintainers/dsh-wsl-workspace)(WSL 工作区注册表)、[dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)(可选底座) |
++
++---
++
++## English summary
++
++An IDE-grade Git tool window that runs `git` **inside the WSL distribution the
++session workspace belongs to** — released as a patch on
++[dsh-ide-git](https://github.com/KannaKuron/dsh-ide-git) 0.15.0 (MIT).
++
++**The panel is unchanged.** What differs is where `git` executes: a WSL workspace
++path already names its own distribution (`\\wsl.localhost\Ubuntu-24.04\…`), so
++nothing is hard-coded and one install serves every distribution. A workspace that
++is not a WSL workspace runs the local `git` exactly as the baseline did.
++
++Failures are named instead of being misread as "not a git repository": an
++unregistered distribution (`wsl-distro-missing`), an unhealthy WSL service
++(`wsl-launcher`), a distribution without git (`git-missing`), and a Linux path at
++the API boundary (`bad-request`, rather than the silent `C:\home\…` resolution).
++
++Two pure modules carry it — `src/target.js` (distribution resolution and
++bidirectional path translation) and `src/wsl-git.js` (the `wsl.exe` argv, the
++spawn spec, failure classification) — pinned by 35 unit assertions; the live
++transport, the path-mapping loop and the panel's own HTTP route are covered by
++the read-only `scripts/acceptance.mjs`. Design rationale and measurements:
++[FORK.md](FORK.md). Baseline documentation is kept verbatim as
++[README.upstream.md](README.upstream.md) and
++[README.upstream.en.md](README.upstream.en.md).
+diff --git a/README_EN.md b/README.upstream.en.md
+similarity index 100%
+rename from README_EN.md
+rename to README.upstream.en.md
+diff --git a/README.upstream.md b/README.upstream.md
+new file mode 100644
+index 0000000..b2dee2d
+--- /dev/null
++++ b/README.upstream.md
+@@ -0,0 +1,176 @@
++# dsh-ide-git
++
++[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
++
++简体中文 | [English](README_EN.md)
++
++> 给 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 的侧边栏装一个 **IDE 级的 Git 工具窗口**——左边分支树、中间提交图谱、右边变更与提交详情,操作方式对齐 JetBrains 系 IDE 的 Git 面板;以 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 原生 Tab 的形式注册,右侧栏与底部面板都能用;v0.13.0 起还可挂在**主对话区**(「对话 / 轨迹」旁边的 Git 标签页,设置里可关)。
++
++DSH 自带的 Git 面板覆盖「暂存 / 提交 / 还原 / 看历史」;`dsh-ide-git` 补齐 IDE 用户习惯的那一层:**分支树 + 右键分支操作 + 提交图谱 + 提交详情 + 变更列表 + 提交框**。
++
++## 它解决什么
++
++- **分支管理没有树**:内置面板只有一个分支下拉。这里给出 `HEAD(当前分支) / 本地 / 远程 / 标签` 的分组树,每个分支带 ahead/behind 角标、上游、worktree 占用标记(`W`)。
++- **历史只是列表**:这里画出提交图谱(lane 拓扑 + 分支/标签 ref 徽章),支持加载更多与过滤(文本 / 哈希 / 作者)。
++- **想看某个提交改了什么**:点提交直接进详情——作者、日期、完整提交信息、变更文件(含 +/− 行数),点文件看逐行 diff(红绿 + 行号 + hunk 高亮)。
++- **想指给 AI 一段代码**:在 diff 窗里选中几行、右键,把「哪个文件哪几行」(附提交或工作区上下文)直接发进当前会话的输入框。
++- **想比较分支**:分支右键即可与当前分支比较,结果按文件与提交数汇报。
++- **操作要够全**:签出、从任意分支/提交新建分支、重命名、删除、合并到当前、变基当前到此、新建标签、cherry-pick、还原提交、重置(保留/丢弃)、fetch / pull --ff-only / push(确认后)。
++
++## 效果
++
++> 下面这些图取自一个**只装了两个插件**(`dsh-better-sidebar` + 本插件)的干净 DSH,绑定在一个虚构的演示仓库上(见 `scripts/demo-repo.mjs`),画面里没有真实工作区、没有壁纸插件、也没有其它面板。
++
++<table>
++<tr>
++<td align="center" width="58%"><img src="docs/screenshots/1-bottom-workbench.png" alt="底部工作台:分支树 / 提交图谱 / 变更与提交"/></td>
++<td valign="top"><b>底部工作台(宽扁 → 三栏)</b><br/>左列是 IDEA 式动作条:按<b>自身高度</b>决定放几个按钮,放不下的收进 <code>⋯</code>,末尾 <code>⚙</code> 可调顺序与显隐;中列是提交列表——列序与 IDEA 一致(<b>日期 → 提交人 → 图谱 → 分支标签 → 提交信息</b>),上方一排筛选(文本/哈希、分支或标签、提交人、日期、路径)与排序方向;右列是变更分组与提交框。</td>
++</tr>
++</table>
++
++<table>
++<tr>
++<td align="center" width="58%"><img src="docs/screenshots/2-commit-menu.png" alt="提交右键菜单"/></td>
++<td valign="top"><b>提交右键</b><br/>详情、复制修订号、签出该修订、在此新建分支、新建标签、优选(Cherry-Pick)、还原提交、重置到此(保留/丢弃更改)——破坏性项标红,菜单在面板内定位,底部工作台里同样能弹出来。</td>
++</tr>
++<tr>
++<td align="center" width="58%"><img src="docs/screenshots/3-branch-undo.png" alt="删除分支后的撤回浮窗"/></td>
++<td valign="top"><b>删除可撤回</b><br/>删除分支/贮藏是<b>真删除</b>,但宿主在动手前记下了对象 id:右下角浮窗点「撤回」即可恢复(一次性、30 分钟内有效);错过浮窗还有顶栏的「最近可撤回的操作」入口。删除 <code>main</code>/<code>master</code> 需要输入分支名确认。</td>
++</tr>
++</table>
++
++<table>
++<tr>
++<td align="center" width="58%"><img src="docs/screenshots/4-rail-settings.png" alt="动作条设置:排序与显隐"/></td>
++<td valign="top"><b>动作条可配置</b><br/>拖动或用箭头调整顺序、眼睛图标逐项显隐,配置只存「排列 + 隐藏」并做过归一化,以后新增动作不会打坏旧配置。</td>
++</tr>
++<tr>
++<td align="center" width="58%"><img src="docs/screenshots/5-commit-detail.png" alt="提交详情与逐行 diff"/></td>
++<td valign="top"><b>提交详情</b><br/>完整提交信息、作者与日期、变更文件列表(带 +/− 行数),点文件看逐行 diff(行号 + hunk 高亮 + 红绿底)。</td>
++</tr>
++</table>
++
++<table>
++<tr>
++<td align="center" width="58%"><img src="docs/screenshots/6-right-sidebar.png" alt="原生右侧栏里的同一面板"/></td>
++<td valign="top"><b>同一个注册,两种布局</b><br/>窄而高的<b>原生右侧栏</b>改用堆叠布局:动作条铺成顶部一行、变更在先、提交列表随后——面板只量自己的尺寸,从不猜自己在哪个容器里。截图顺序、演示仓库与干净环境都由 <code>scripts/screenshots.mjs</code> 复现。</td>
++</tr>
++</table>
++
++## 右键发送到对话
++
++面板里的一切都能右键塞进**当前会话的输入框**——走 DSH 官方的 composer 插入通道(不动你已输入的文字,追加在末尾;发送中或服务不在时自动退化为复制到剪贴板并提示,绝不死点击):
++
++- **提交** → `git 提交 47ad017「提交标题」(仓库 xxx)`:短哈希 + 提交信息 + 仓库,一段话指名一个修订;
++- **分支** → `git 分支 main(仓库 xxx)`;
++- **文件**(变更列表与提交详情的文件行)→ 一个 `@路径` 文件引用 chip(DSH 原生 @ 语法,含空格的路径自动加引号),或者只发文件路径;
++- **diff 选中行**:在提交详情或工作区变更打开的 diff 窗里**选中一段文本再右键** → 「发送选中行到对话」:`@文件` chip + 行号说明——提交场景是「第 N–M 行(提交 47ad017「标题」@ 当前分支)」,工作区场景是「第 N–M 行(工作区已暂存 / 未提交)」。行号由选区所在的 diff 行按 hunk 头换算成**新文件行号**;选中的全是删除行时用旧号并标注「旧行号」。选区落不到可定位的 diff 行上时,菜单退化为「发送选中片段到对话」(原文截断 600 字符),不编造行号;菜单里同时有「复制选中引用」。没有选区时右键保持浏览器默认菜单。
++
++配套已经就位的几件事:变更文件行与详情文件行的行首图标按扩展名着色(DSH 自家 FileTypeIcon);diff 预览用 DSH 自家 DiffBlock 组件渲染(红绿底、复制 / 换行工具栏,视觉与宿主一致);diff 窗高度可拖拽调节并按位置记忆;整个面板还可以挂进**主对话区**——「对话 / 轨迹」旁的 Git 标签页,插件设置里可关。
++
++## 挂在哪里:两个宿主,一个面板
++
++本插件只注册一次,落到哪个面上由**宿主**决定,两条通道互斥:
++
++| 宿主 | 条件 | 你得到什么 |
++|---|---|---|
++| **dsh-better-sidebar**(底座,可选) | 装了它 | 它的 Tab 系统:右侧栏里的原生 Tab **加上底部工作台**;它的设置页 `侧边卡片` 里能看到本插件的卡片 |
++| **DSH 原生右侧栏** | 没装底座时自动接管 | 右侧栏 Guide 页里的 **Git** 胶囊 → 点开就是同一个面板 |
++| **主对话区标签页**(v0.13.0 起) | 总是可用(可在设置里关闭) | 会话顶部「对话 / 轨迹」旁多一枚 **Git** 标签,点它整块主对话区变成 Git 工具窗口;开关在插件设置 →「面板放置」 |
++
++底座在场时以它为准(它还带底部工作台);底座**晚到**会顶掉原生注册再挂到它那边。所以**只装本插件也能用**,没有任何前置要求。
++
++同一个面板会出现在形态完全不同的面上,所以布局靠量而不是猜:
++
++| 面 | 形态 | 本插件的布局 |
++|---|---|---|
++| 右侧栏(原生的,或底座桥接过来的) | 窄而高 | `stack`:变更区在提交历史之上,分支树可收起,详情/差异占满主区 |
++| 底部工作台(底座自有) | 宽而扁 | `columns`:分支树 · 提交图谱 · 变更与提交框,三栏并排——就是 JetBrains Git 工具窗口的样子 |
++
++插件不猜自己在哪儿,而是用 `ResizeObserver` 量自己的容器:宽 ≥ 600px 且宽 ≥ 高 × 1.15 走三栏,否则走纵向堆叠(宽度说了算,高度没有否决权)。自由浮窗、移动端抽屉同样自适应。
++
++## 功能一览
++
++| 区域 | 能力 |
++|---|---|
++| 动作条 | IDEA 式左侧竖排(底部工作台)/ 顶栏下一行横排(右侧栏):刷新、新建分支、签出、删除、比较、显示差异、贮藏、新建标签、收藏、抓取、拉取、推送。**按可用空间自动决定放几个**,放不下的收进 `⋯ 更多`;末尾 `⚙ 设置` 可拖动排序、逐项显隐(存 `dsh-ide-git.rail.v1`)。每个按钮按当前状态点亮/置灰(没有其他分支就不能删除/签出/比较,没有远程就不能抓取/推送,没有上游就不能拉取,没有变更就没有差异可看) |
++| 状态行 | 当前分支、上游、`↑ahead ↓behind`、stash 数量、忙碌指示 |
++| 分支树 | `HEAD / 本地 / 远程 / 标签` 分组(可折叠)、过滤框、星标当前分支、ahead/behind 角标、worktree 占用标记;本地蓝 / 远程紫 / 标签黄 / HEAD 绿 |
++| 分支右键 | 签出、将当前分支变基到此、合并到当前分支、与当前分支比较、从该分支新建分支、重命名、删除(当前分支禁用)、更新(Fetch)、推送、发送到对话(分支名 + 仓库) |
++| 历史筛选 | 文本或哈希、分支或标签、提交人、日期(今天 / 近 7 天 / 近 30 天 / 今年),外加排序方向(新→旧 / 旧→新)与一键清除;路径筛选回车后由 git 服务端过滤(`git log -- <path>`) |
++| 提交列表 | 列序对齐 IDEA:**日期 → 提交人 → 图谱 → 分支标签 → 提交信息**;lane 拓扑图整格连线(相邻行像素对齐)、HEAD 空心点、refs 徽章(HEAD 绿 / 本地蓝 / 远程紫 / 标签黄,最多 3 个 + `+n`)、加载更多(每页 120) |
++| 提交右键 | 提交详情、复制修订号、签出该修订(确认)、在此新建分支、新建标签、cherry-pick、还原提交、重置到此(保留 / 丢弃更改)、发送到对话(短哈希 + 提交信息 + 仓库) |
++| 提交详情 | 完整提交信息、作者/日期、变更文件列表(+/−),点文件看逐行 diff |
++| diff 窗 | DSH 自家 DiffBlock 渲染(红绿底 + 复制/换行工具栏)、高度可拖拽调节并按位置记忆;**选中 diff 行右键**把行级引用发进对话——`@文件` + 第 N–M 行 + 提交(短哈希/标题/当前分支)或工作区(已暂存/未提交)上下文,删除行标注旧行号,选区定位不到行时发选中片段(截断 600 字符),另有「复制选中引用」 |
++| 变更列表 | 冲突 / 已暂存 / 更改 / 未跟踪 四组,行内 暂存 / 取消暂存 / 丢弃,分组级「全部暂存 / 全部取消暂存」,点击行看 diff |
++| 提交框 | 多行提交信息、`Ctrl+Enter`(macOS `Cmd+Enter`)提交、修补上次提交(`--amend`) |
++| 文件右键 | 显示差异、暂存/取消暂存、丢弃更改、复制路径、发送到对话(`@文件` 引用 chip 或文件路径) |
++| 安全与撤回 | 删除分支 / 删除贮藏后右下角弹提示条,点「撤回」即可恢复(真删除 + 按删除前记下的对象 id 重建,一次性、30 分钟内有效),顶栏的撤回图标里也能找到最近删除;`main`/`master`/`trunk` 的删除要求输入分支名确认,所有破坏性确认框焦点默认在「取消」;同一仓库的写操作在宿主串行执行;仓库里还有未结束的 merge / rebase / cherry-pick / revert / bisect 时,相关动作全部置灰并说明原因 |
++
++## 安装
++
++```sh
++# 本插件可以单独使用:面板直接出现在 DSH 原生右侧栏
++dsh plugin --profile web add dsh-ide-git
++# 可选底座:装了它才会多出底部工作台,并跟随它的侧栏布局
++dsh plugin --profile web add dsh-better-sidebar
++# 重启 dsh web
++```
++
++装好后打开任意会话:
++
++- **只装本插件**:点会话头右侧的「打开右侧边栏」→ Guide 页里的 **Git** 胶囊 → 面板打开;
++- **装了底座**:会话头右侧的面板开合按钮 → 面板 Tab 条右侧 `+` → 选 **Git**(底部工作台);原生右侧栏的 `+` → **Git**(同一注册,同一份状态);
++- 底座在场时,它的设置页 **侧边卡片** 分区里也会出现本插件的卡片(标题 / id / 启用开关),随时停用。
++
++### 兼容性
++
++- `engines.dsh` 声明为 **`>=0.1.2-0`** ——0.1.2 起的全部版本都算,包括 `0.1.5-rc` / `0.1.6-alpha` 这类**预发布**(纯 semver 下预发布默认不匹配任何范围,所以起点写成了 `-0`)。**同一个值也是 `@deepseek-ai/dsh` 的 peerDependencies**:dsh 0.1.7 起会强制执行 peer 里的 `@deepseek-ai/dsh*` 范围(不满足就不加载),而 `engines` 没有任何读取方——写进 peer 才算数。范围是**开放下界、不封顶**,所以 0.1.7 起的任何宿主(含 rc / alpha 预发布)都不会因此被禁用;0.1.0–0.1.6 没有这套检查,完全不受影响。
++- 只依赖三样长期契约:宿主半的 `webServer.register({ kind: 'prefix' })` 路由、客户端半的 `window.__ModuleLoader__.load({ id, factory })`、以及客户端的 `slots` 服务。**不引用 `ui-primitives` 图标集**(图标全是自带 SVG),所以宿主删改图标不会波及本插件。
++- 底座是**可选** peer:没装、装坏了、或它自己要等上游修,都不影响本插件挂到原生右侧栏。
++
++### 界面语言
++
++跟随 DSH 的语言设置(`ctx.locale`)实时切换,内置 **21 种**词典:简繁中文(含 `zh-HK` / `zh-MO` / `zh-TW`)、英语、日语、韩语、德语、法语、意大利语、葡萄牙语、俄语、荷兰语、波兰语、瑞典语、土耳其语、印尼语、越南语、泰语、印地语、阿拉伯语。词典同时注册进 DSH 的 locale 注册表(`ctx.locale.register`);解析顺序是「精确 tag → 主语言子标签 → 英文」,而**英文始终是键完整的那本**,所以任何未覆盖的语言都回退英文,不会露出键名。
++
++词典就在 `src/client.js` 的 `LOCALES` 表里:一门语言一个条目,条目前面有一行 `/* locale: <tag> */` 标记。**校验是自动的**——冒烟测试强制每本词典的键集与中文完全一致(缺键会静默回退英文,面板就成了半翻译状态,那正是这条测试要挡住的)。
++
++## 工作原理
++
++```
++宿主半 src/index.js                       客户端半 src/client.js
++  POST /dsh-ide-git/api/<method>            ctx.betterSidebar.registerTab({ id: 'dsh-ide-git:panel' })
++  └─ spawn('git', argv, { cwd })            └─ Panel:ResizeObserver → columns / stack
++     └─ 会话工作区 = cwd(客户端 scope.cwd 传入)
++```
++
++- **宿主半**:一个前缀路由 `/dsh-ide-git/api`,方法表 32 个(`summary` / `branches` / `log` / `commitDetail` / `diff` / `compare` / `stage` / … / `push` / `tagDelete` / `version`)。所有 git 调用都是 **argv 数组 + `spawn`**(没有 shell 字符串、没有 `exec`),参数先过校验(绝对路径、ref 不以 `-` 开头、无控制字符、路径不越出仓库)。
++- **客户端半**:无构建、单文件、`window.__ModuleLoader__.load({ id, factory })` 包装,只 `require('react')`(DSH 客户端基线模块白名单内)。
++- **信任围栏**:路由挂在 DSH 自己的 web server 上,天然同源;只有 Host 为 loopback,或浏览器标记 `Sec-Fetch-Site: same-origin/same-site` 的请求才会被服务。
++- **破坏性操作**:`push` / 硬重置 / 强制删分支 / 丢弃未跟踪文件 / 删除 stash 都必须显式 `confirm: true`,UI 侧一律弹二次确认。
++
++## 限制与路线图
++
++- **v0.1.0 只覆盖主路径**:分支树 + 图谱 + 变更 + 提交 + 详情 + 常用分支/提交操作。下面的还在路上:
++  - 变更/提交的**多选与批量操作**、按文件部分提交(类似 IDEA 的 Changelist);
++  - 交互式变基(`rebase -i`)、fixup/squash、补丁(format-patch/apply);
++  - 三方合并冲突编辑器、冲突解决动作(接受本地/远端);
++  - blame / 文件历史视图、行级注释;
++  - 设置页的插件自有开关(提交后自动刷新、diff 上下文行数等);
++  - worktree 视图(当前只在分支行标注占用)。
++- **只面向 `web` profile**:`dsh.client.platform` 为 `web`;桌面客户端的 renderer 复用同一套 shell 资产,但尚未真机验证。
++- **不写 `.git`**:所有操作都通过 `git` 命令走正常索引/引用,插件不直接改 `.git` 内部文件。
++- **大仓库**:提交列表分页(120/页),diff 输出上限 400KB(超出截断并标记)。
++
++## 开发
++
++```sh
++npm test      # 两层:smoke(文件级:清单一致性、客户端包装、白名单、确认守卫、方法表)
++              #      + api(临时真实仓库直驱宿主路由:解析、暂存/提交/分支/标签/stash、全部守卫与信任围栏)
++```
++
++本机联调:把仓库加到 web profile 后重启 `dsh web`;客户端半改动由 DSH 热加载,宿主半改动需要重启。
++
++## 许可
++
++MIT © KannaKuron
+diff --git a/cordis.patch.yml b/cordis.patch.yml
+index cfa27ad..5342359 100644
+--- a/cordis.patch.yml
++++ b/cordis.patch.yml
+@@ -1,8 +1,8 @@
+-# dsh-ide-git bundle patch.
++# dsh-wsl-git bundle patch.
+ #
+ # Installed through the official CLI —
+ #
+-#   dsh plugin --profile <name> add dsh-ide-git
++#   dsh plugin --profile <name> add dsh-wsl-git
+ #
+ # — the command reconciles dsh.profile.bundles against installed packages and,
+ # seeing this declaration, merges THIS patch exactly like the manual mount line
+@@ -11,12 +11,18 @@
+ # Manual mount equivalent (profile cordis.patch.yml):
+ #
+ #   - insert:
+-#       - id: ide-git
+-#         name: 'dsh-ide-git'
++#       - id: wsl-git
++#         name: 'dsh-wsl-git'
+ #
+-# Only the Node half loads through this row (the /dsh-ide-git/api git routes).
++# Only the Node half loads through this row (the /dsh-wsl-git/api git routes).
+ # The web client half is served through exports["./client"] and mounted by the
+ # browser boot graph; there it registers one dsh-better-sidebar tab.
++#
++# The row id is 'wsl-git', NOT 'ide-git': the plugin persists its settings card
++# values under the loader row id, so sharing the upstream id would make the two
++# plugins read and write one document. It also means both may be mounted at
++# once without a duplicate-row error — but they must not be, because each
++# registers its own Git tab and the upstream one cannot see a WSL repository.
+ - insert:
+-    - id: ide-git
+-      name: 'dsh-ide-git'
++    - id: wsl-git
++      name: 'dsh-wsl-git'
+diff --git a/dsh.plugin.json b/dsh.plugin.json
+index 63c43b7..ae1291b 100644
+--- a/dsh.plugin.json
++++ b/dsh.plugin.json
+@@ -1,8 +1,8 @@
+ {
+-  "id": "dsh-external/dsh-ide-git",
+-  "version": "0.15.0",
++  "id": "dsh-external/dsh-wsl-git",
++  "version": "0.15.0-wsl",
+   "main": "./src/index.js",
+-  "description": "IDE 级 Git 操作面板:分支树 + 提交图谱 + 变更/暂存/提交 + 提交详情。装了 dsh-better-sidebar 时挂成它的原生 tab(右侧栏 + 底部工作台);没装时直接挂 DSH 原生右侧栏,单独安装即可用。JetBrains 风格 Git 工具窗口 for DeepSeek Harness.",
++  "description": "IDE 级 Git 操作面板,但 git 在会话工作区所属的 WSL 发行版内执行:分支树 + 提交图谱 + 变更/暂存/提交 + 提交详情。发行版由工作区路径决定(UNC 路径自带发行版名),不硬编码;非 WSL 工作区行为与本地版一致。装了 dsh-better-sidebar 时挂成它的原生 tab(右侧栏 + 底部工作台);没装时直接挂 DSH 原生右侧栏。Fork of dsh-ide-git 0.13.5.",
+   "engines": {
+     "dsh": ">=0.1.6-alpha.2"
+   },
+diff --git a/package.json b/package.json
+index 3091477..3378195 100644
+--- a/package.json
++++ b/package.json
+@@ -1,11 +1,11 @@
+ {
+-  "name": "dsh-ide-git",
+-  "version": "0.15.0",
+-  "description": "DSH plugin: an IDE-grade Git tool window as a native dsh-better-sidebar tab — branch tree, commit graph, changes, commit details, JetBrains-style actions, in the right sidebar and the bottom panel. | DSH 插件:IDE 级 Git 工具窗口,以 dsh-better-sidebar 原生 Tab 挂载——分支树 / 提交图谱 / 变更与提交详情 / JetBrains 风格操作,右侧栏与底部面板双布局自适应。",
++  "name": "dsh-wsl-git",
++  "version": "0.15.0-wsl",
++  "description": "Fork patch of dsh-ide-git 0.13.5 (MIT): the same IDE-grade Git tool window, but git runs INSIDE the WSL distribution the session workspace belongs to. A WSL workspace path names its own distribution, so nothing is hard-coded and one install serves every distribution; a workspace that is not a WSL workspace behaves exactly as the baseline. Launcher failures are named instead of being served as \"not a git repository\". | dsh-ide-git 0.13.5 的 fork 补丁:同一个 IDE 级 Git 工具窗口,但 git 在会话工作区所属的 WSL 发行版内执行。发行版由工作区路径决定,无需配置;非 WSL 工作区行为与基线完全一致。启动器失败会被点名,不再伪装成「不是 git 仓库」。",
+   "type": "module",
+   "repository": {
+     "type": "git",
+-    "url": "git+https://github.com/KannaKuron/dsh-ide-git.git"
++    "url": "git+https://github.com/SteafShi/dsh-wsl-git.git"
+   },
+   "publishConfig": {
+     "access": "public"
+@@ -38,17 +38,22 @@
+   "files": [
+     "icon.svg",
+     "locale",
+-    "src/index.js",
+-    "src/client.js",
++    "src",
+     "cordis.patch.yml",
+     "dsh.plugin.json",
+     "README.md",
+-    "README_EN.md",
++    "README.upstream.md",
++    "README.upstream.en.md",
++    "FORK.md",
++    "CHANGELOG.md",
++    "PUBLISHING.md",
++    "NOTICE",
++    "patch",
+     "docs/screenshots",
+     "LICENSE"
+   ],
+   "scripts": {
+-    "test": "node --test tests/smoke.mjs tests/api.test.mjs tests/graph.test.mjs tests/repos.test.mjs",
++    "test": "node --test tests/target.test.mjs",
+     "version": "node -e \"const fs=require('fs');const m=JSON.parse(fs.readFileSync('dsh.plugin.json','utf8'));const v=JSON.parse(fs.readFileSync('package.json','utf8')).version;m.version=v;fs.writeFileSync('dsh.plugin.json',JSON.stringify(m,null,2)+'\\n')\" && git add dsh.plugin.json",
+     "probe:settings-card": "node scripts/settings-card-probe.mjs"
+   },
+@@ -61,7 +66,11 @@
+     "git-gui",
+     "source-control",
+     "sidebar",
+-    "commit-graph"
++    "commit-graph",
++    "wsl",
++    "wsl2",
++    "fork",
++    "dsh-ide-git"
+   ],
+   "license": "MIT",
+   "peerDependencies": {
+@@ -77,9 +86,9 @@
+       "optional": true
+     }
+   },
+-  "homepage": "https://github.com/KannaKuron/dsh-ide-git",
++  "homepage": "https://github.com/SteafShi/dsh-wsl-git#readme",
+   "bugs": {
+-    "url": "https://github.com/KannaKuron/dsh-ide-git/issues"
++    "url": "https://github.com/SteafShi/dsh-wsl-git/issues"
+   },
+   "icon": "./icon.svg"
+ }
+diff --git a/scripts/acceptance.mjs b/scripts/acceptance.mjs
+new file mode 100644
+index 0000000..3733cb0
+--- /dev/null
++++ b/scripts/acceptance.mjs
+@@ -0,0 +1,230 @@
++/**
++ * dsh-wsl-git — acceptance run.
++ *
++ * The unit suite (tests/target.test.mjs) proves the DECISIONS. This proves the
++ * two things a unit test cannot: that the argv actually reaches a distribution's
++ * own git, and that the paths it prints come back in a spelling the host can
++ * read. Both are the failure modes this fork exists for, and both are silent
++ * when they break — a wrong world answers "not a git repository" about a
++ * repository that exists.
++ *
++ * READ-ONLY: no method called here mutates a repository.
++ *
++ * Usage (from the package root):
++ *
++ *   node scripts/acceptance.mjs
++ *   node scripts/acceptance.mjs --distro Ubuntu-24.04 --workspace '\\wsl.localhost\Ubuntu-24.04\home\me\proj'
++ *
++ * With `--workspace` omitted it uses the workspaces DSH has registered, so on a
++ * machine with WSL workspaces it needs no arguments. The HTTP half is skipped
++ * when the harness is not reachable at --origin.
++ */
++
++import { spawn } from 'node:child_process'
++import { existsSync, readdirSync, readFileSync } from 'node:fs'
++import { homedir } from 'node:os'
++import path from 'node:path'
++import process from 'node:process'
++
++import { describeTarget, linuxPathOf, linuxToHost, readWslWorkspaces, resolveTarget } from '../src/target.js'
++import { gitProgramFor, gitSpawnSpec, launcherFailureOf, remoteGitMissingOf } from '../src/wsl-git.js'
++
++/* ============================== args ============================== */
++
++function argOf(name, fallback) {
++  const index = process.argv.indexOf('--' + name)
++  return index >= 0 && process.argv[index + 1] !== undefined ? process.argv[index + 1] : fallback
++}
++
++const ORIGIN = argOf('origin', 'http://127.0.0.1:19387')
++const DSH_HOME = process.env.DSH_HOME ?? path.join(homedir(), '.dsh')
++const STORE = readWslWorkspaces(DSH_HOME)
++
++/** The workspaces to check: the ones given, or every WSL one DSH knows about. */
++function workspacesFromEnvironment() {
++  const explicit = argOf('workspace', null)
++  if (explicit !== null) return [explicit]
++  const found = []
++  for (const key of Object.keys(STORE)) {
++    const target = resolveTarget(key, { store: STORE })
++    // For a `/mnt` key the registered path is the workspace itself; for a UNC key
++    // it is too. Either way the key resolves, so use it as-is.
++    if (target.kind === 'wsl') found.push(key)
++  }
++  if (found.length === 0) {
++    // Nothing registered by the WSL plugin: fall back to the workspace registry,
++    // which is where a UNC workspace added from the GUI is recorded.
++    try {
++      const store = JSON.parse(readFileSync(path.join(DSH_HOME, 'storages', 'workspace.json'), 'utf8'))
++      for (const entry of Object.values(store?.tables?.workspaces ?? {})) {
++        if (typeof entry?.path === 'string' && resolveTarget(entry.path, { store: STORE }).kind === 'wsl') found.push(entry.path)
++      }
++    } catch { /* no workspace registry: the caller must pass --workspace */ }
++  }
++  return found
++}
++
++let failures = 0
++function check(label, condition, detail) {
++  if (!condition) failures += 1
++  console.log(`  [${condition ? 'PASS' : 'FAIL'}] ${label}${condition ? '' : ' — ' + (detail === undefined ? '' : JSON.stringify(detail))}`)
++}
++function note(label, value) {
++  console.log(`  ${String(label).padEnd(18)} ${typeof value === 'string' ? value : JSON.stringify(value)}`)
++}
++
++/* ============================== 1. the transport ============================== */
++
++/** Run argv to completion, resolving for any exit code. */
++function run(spec) {
++  return new Promise((resolve) => {
++    const child = spawn(spec.argv[0], spec.argv.slice(1), spec.options)
++    const out = []
++    const err = []
++    child.stdout.on('data', (chunk) => out.push(chunk))
++    child.stderr.on('data', (chunk) => err.push(chunk))
++    child.on('error', (error) => resolve({ code: -1, stdout: '', stderr: String(error.message), error }))
++    child.on('close', (code) => resolve({ code, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') }))
++  })
++}
++
++async function gitIn(target, args, program = gitProgramFor(target, '')) {
++  return run(gitSpawnSpec(target, args, program))
++}
++
++const workspaces = workspacesFromEnvironment()
++console.log(`\n### 1. the transport — which git answers, per workspace`)
++console.log(`  registry: ${DSH_HOME}\\wsl-workspaces.json (${Object.keys(STORE).length} entries), ${workspaces.length} WSL workspace(s)`)
++if (workspaces.length === 0) {
++  console.log('  [SKIP] no WSL workspace found; pass --workspace to name one')
++}
++
++const resolved = []
++for (const hostPath of workspaces) {
++  const target = resolveTarget(hostPath, { store: STORE })
++  console.log(`\n  --- ${hostPath}`)
++  note('target', describeTarget(target))
++  if (target.kind !== 'wsl') { check('resolves to a WSL world', false, target.kind); continue }
++  resolved.push({ hostPath, target })
++
++  const version = await gitIn(target, ['--version'])
++  note('git', (version.stdout || version.stderr).trim())
++  const failure = launcherFailureOf(target, version) ?? remoteGitMissingOf(target, version)
++  if (failure !== null) { check('git answered (no launcher failure)', false, failure.message); continue }
++  check('git answered inside the distribution', version.code === 0 && /^git version /.test(version.stdout.trim()), version.stdout)
++
++  const top = await gitIn(target, ['rev-parse', '--show-toplevel'])
++  /* "Not a repository" is a NORMAL state for this panel — it answers with a repo
++     picker, not an error — so it is reported, not failed. What would be a failure
++     is the launcher talking instead of git, and that was already checked above. */
++  if (top.code !== 0) {
++    note('toplevel', 'not a git repository (a normal state; the panel shows its repo picker)')
++    continue
++  }
++  const reported = top.stdout.trim()
++  note('toplevel', reported)
++  check('the workspace is a repository', reported !== '', reported)
++
++  /* The loop that a missing mapping breaks: git answers in its own world, and the
++     answer has to come back in one the host can read. */
++  const mapped = linuxToHost(reported, target.distro)
++  check('the reported path maps to a host spelling', typeof mapped === 'string' && mapped !== '', mapped)
++  check('the host can stat the mapped path', mapped !== null && existsSync(mapped) === true, mapped)
++  if (mapped !== null && existsSync(mapped)) {
++    const entries = (() => { try { return readdirSync(mapped).length } catch { return -1 } })()
++    check('the host can list the mapped path', entries >= 0, entries)
++  }
++  const again = resolveTarget(String(mapped), { store: STORE })
++  check('the mapped path resolves to the SAME world', again.kind === 'wsl' && again.distro === target.distro && again.linuxPath === reported,
++    describeTarget(again))
++
++  /* The git directory is what `operationOf` stats for a merge/rebase in progress. */
++  const gitDir = await gitIn(target, ['rev-parse', '--absolute-git-dir'])
++  if (gitDir.code === 0 && gitDir.stdout.trim() !== '') {
++    const mappedGitDir = linuxToHost(gitDir.stdout.trim(), target.distro)
++    check('the git directory is readable from the host (merge/rebase markers)',
++      mappedGitDir !== null && existsSync(path.join(mappedGitDir, 'HEAD')) === true, mappedGitDir)
++
++    /* Ground truth for the INVERSE mapping. git just told us the Linux spelling of
++       the repository's git directory; mapping the host spelling back must land on
++       exactly that string. This is the invariant a rebase can silently break — and
++       it needs no fixture, because git is the reference. */
++    check('host -> Linux mapping agrees with git itself (linuxPathOf == git output)',
++      linuxPathOf(target, String(mappedGitDir)) === gitDir.stdout.trim(),
++      `mapped=${linuxPathOf(target, String(mappedGitDir))} git said=${gitDir.stdout.trim()}`)
++
++    /* The ARGUMENT direction, introduced by upstream 0.15.0: `diff`'s untracked
++       preview passes an ABSOLUTE path as a git argument. Exercised for real and
++       read-only, using a file that always exists. Exit 1 means "differences
++       found", which is data rather than failure — the same rule the route applies. */
++    const probeFile = gitDir.stdout.trim() + '/HEAD'
++    const probe = await gitIn(target, ['diff', '--no-color', '--no-ext-diff', '-U3', '--no-index', '--', '/dev/null', probeFile])
++    check('an absolute path passed AS AN ARGUMENT reaches the file (diff --no-index)',
++      (probe.code === 0 || probe.code === 1) && /^diff --git /m.test(probe.stdout) && probe.stdout.includes(probeFile),
++      `exit=${probe.code} stderr=${probe.stderr.trim().slice(0, 120)}`)
++  }
++}
++
++/* ============================== 2. the HTTP surface ============================== */
++
++console.log(`\n### 2. the HTTP surface — the panel's own route, at ${ORIGIN}`)
++
++const PLUGIN = 'dsh-wsl-git'
++async function call(method, payload) {
++  const response = await fetch(`${ORIGIN}/${PLUGIN}/api/${method}`, {
++    method: 'POST',
++    headers: { 'content-type': 'application/json' },
++    body: JSON.stringify(payload ?? {}),
++  })
++  const text = await response.text()
++  let body
++  try { body = JSON.parse(text) } catch { body = { raw: text } }
++  return { status: response.status, body }
++}
++
++const first = resolved[0]
++if (first === undefined) {
++  console.log('  [SKIP] no WSL workspace to drive the API with')
++} else {
++  let reachable = true
++  try {
++    const probe = await call('version', { cwd: first.hostPath })
++    reachable = probe.status === 200
++    note('version', probe.body?.data)
++    check('the panel route answers and names the WSL world', probe.body?.data?.world === 'wsl', probe.body)
++    check('it reports the distribution the workspace names',
++      String(probe.body?.data?.target ?? '').includes(first.target.distro), probe.body?.data?.target)
++  } catch (error) {
++    reachable = false
++    console.log(`  [SKIP] ${ORIGIN} is not reachable (${String(error.message).slice(0, 60)}); start the harness to check the HTTP half`)
++  }
++
++  if (reachable) {
++    /* `cwd` and `repoRoot` are the two paths the browser sends, in the spellings
++       it actually produces: the workspace as stored, and a repo row as the host
++       slash-normalized it. */
++    const repos = await call('repos', { cwd: first.hostPath })
++    note('repos', repos.body?.data?.repos?.map((row) => row.kind + ' ' + row.path))
++    check('discovery finds the workspace as a repository', repos.body?.data?.isRepo === true, repos.body)
++
++    const repoRoot = repos.body?.data?.repos?.[0]?.path
++    check('a discovered row carries the host spelling', typeof repoRoot === 'string' && repoRoot !== '', repoRoot)
++
++    for (const method of ['summary', 'branches', 'log', 'stashList', 'undoList']) {
++      const answer = await call(method, { cwd: first.hostPath, repoRoot, limit: 5 })
++      check(`${method} answers`, answer.status === 200 && answer.body?.ok === true, answer.body)
++    }
++
++    /* The failure that used to be reported as "not a git repository". */
++    const bogus = await call('repos', { cwd: '\\\\wsl.localhost\\NoSuchDistribution\\home\\x' })
++    check('an unregistered distribution is named, not mistaken for a missing repository',
++      bogus.body?.error?.code === 'wsl-distro-missing', bogus.body)
++
++    const linuxPath = await call('repos', { cwd: '/home/x' })
++    check('a Linux path is refused by name at the boundary',
++      linuxPath.body?.error?.code === 'bad-request' && /not a Linux path/.test(String(linuxPath.body?.error?.message)), linuxPath.body)
++  }
++}
++
++console.log(`\n${failures === 0 ? 'ACCEPTANCE PASSED' : failures + ' CHECK(S) FAILED'}`)
++process.exit(failures === 0 ? 0 : 1)
+diff --git a/src/client.js b/src/client.js
+index bd35347..c618003 100644
+--- a/src/client.js
++++ b/src/client.js
+@@ -1,5 +1,13 @@
+ /**
+- * dsh-ide-git — client half (plain JavaScript, no build step).
++ * dsh-wsl-git — client half (plain JavaScript, no build step).
++ *
++ * A fork of dsh-ide-git 0.13.5 (MIT). The panel is unchanged; what differs is
++ * that `git` may run inside a WSL distribution (see src/index.js's PATH
++ * CONTRACT). The client never learns which world it is talking to: every path
++ * it receives is a host spelling, and the only places that spelling was
++ * mishandled are `baseName`/`dirName` (which split on '/' only, so a UNC repo
++ * root came back whole) and the path LABELS, which show the Linux spelling a
++ * person actually thinks in via `displayPath`.
+  *
+  * Registers ONE dsh-better-sidebar tab: an IDE-style Git tool window.
+  *
+@@ -17,7 +25,7 @@
+  * exactly like better-sidebar's own panels do.
+  */
+ window.__ModuleLoader__.load({
+-  id: 'dsh-ide-git',
++  id: 'dsh-wsl-git',
+   factory: (require) => {
+     const React = require('react')
+     const E = React.createElement
+@@ -51,18 +59,18 @@ window.__ModuleLoader__.load({
+        shell with <base href="./">, so document.baseURI is the mount the page
+        was loaded from — the origin root, or a prefix-stripping proxy's sub-path
+        (issue #4). fetch() resolves this relative path against the document
+-       base, so the panel's calls land on /dsh-ide-git/api at the origin root
+-       and on <mount>/dsh-ide-git/api under a sub-path, both matching the route
++       base, so the panel's calls land on /dsh-wsl-git/api at the origin root
++       and on <mount>/dsh-wsl-git/api under a sub-path, both matching the route
+        the host half registered at its upstream path. An origin-absolute base
+        would escape the mount and 404 behind any strict proxy. */
+-    const API_BASE = 'dsh-ide-git/api'
+-    const TAB_ID = 'dsh-ide-git:panel'
++    const API_BASE = 'dsh-wsl-git/api'
++    const TAB_ID = 'dsh-wsl-git:panel'
+     /* The bundle's package name: the key the Plugins page uses for a bundle's own
+        page and its `plugins.bundle.config` slot. */
+-    const SETTINGS_BUNDLE = 'dsh-ide-git'
++    const SETTINGS_BUNDLE = 'dsh-wsl-git'
+     /* The namespace this plugin's dictionaries are published under in the DSH
+        locale registry. */
+-    const LOCALE_NS = 'dsh-ide-git'
++    const LOCALE_NS = 'dsh-wsl-git'
+     const LANE_WIDTH = 14
+     /* Hard cap on the drawn lane columns. Lanes beyond the cap collapse into
+        the last column: without the cap a branchy repository pushed the graph
+@@ -70,7 +78,7 @@ window.__ModuleLoader__.load({
+     const GRAPH_MAX_LANES = 7
+     const LANE_COLORS = ['#4d6bfe', '#e2a03f', '#3fb950', '#d2679b', '#59b0d6', '#b083f0', '#d2694a', '#8a9aa8']
+     const AUTO_REFRESH_MS = 12000
+-    const REPO_KEY = 'dsh-ide-git.repo.v1'
++    const REPO_KEY = 'dsh-wsl-git.repo.v1'
+     const COMPACT_MAX_WIDTH = 400
+     /* Branch rows sit one step right of their SECTION header, and each namespace
+        folder adds another step. Without the base step the rows started at 8px —
+@@ -5338,7 +5346,7 @@ window.__ModuleLoader__.load({
+        mode, quota errors and corrupted payloads degrade to "no seed", never to
+        an error — and never to a rollback of live state (seeding still only
+        fills cold state, see the panel side below). */
+-    const PAINT_KEY = 'dsh-ide-git.paint.v1'
++    const PAINT_KEY = 'dsh-wsl-git.paint.v1'
+     let paintHydrated = false
+ 
+     function hydratePaint() {
+@@ -5437,7 +5445,7 @@ window.__ModuleLoader__.load({
+        snapped back to defaults and folders re-folded. One localStorage home,
+        GLOBAL by design: which sections you keep folded is a habit, not a
+        property of the repository. ---- */
+-    const TREE_KEY = 'dsh-ide-git.tree.v1'
++    const TREE_KEY = 'dsh-wsl-git.tree.v1'
+ 
+     function readTreeState() {
+       try {
+@@ -5528,7 +5536,7 @@ window.__ModuleLoader__.load({
+       } catch (error) { void error }
+     }
+ 
+-    const FAV_KEY = 'dsh-ide-git.favorites.v1'
++    const FAV_KEY = 'dsh-wsl-git.favorites.v1'
+ 
+     function readFavorites(repoPath) {
+       try {
+@@ -5555,7 +5563,7 @@ window.__ModuleLoader__.load({
+       return next
+     }
+ 
+-    const RAIL_KEY = 'dsh-ide-git.rail.v1'
++    const RAIL_KEY = 'dsh-wsl-git.rail.v1'
+ 
+     /* The action rail is user-composed. RAIL_SPECS is the canonical set AND the
+        default order; a stored config only holds a permutation plus the ids the
+@@ -5624,7 +5632,7 @@ window.__ModuleLoader__.load({
+     /* One write window for the settings card: a burst of switches becomes one
+        atomic mutation instead of a stream the Host can lose. */
+     const FLUSH_MS = 250
+-    const RAIL_MIGRATED_KEY = 'dsh-ide-git.rail.v1.migrated'
++    const RAIL_MIGRATED_KEY = 'dsh-wsl-git.rail.v1.migrated'
+     let railForm = null
+     let railMigrating = false
+     const railWatchers = new Set()
+@@ -5728,8 +5736,8 @@ window.__ModuleLoader__.load({
+           const written = active.set(field, visible)
+           if (written !== undefined && written !== null && typeof written.then === 'function') {
+             void written.then((accepted) => {
+-              if (accepted === false) console.warn('[dsh-ide-git] rail setting "' + field + '" was refused by the host')
+-            }, (error) => { console.warn('[dsh-ide-git] rail setting write failed: ' + String(error && error.message ? error.message : error)) })
++              if (accepted === false) console.warn('[dsh-wsl-git] rail setting "' + field + '" was refused by the host')
++            }, (error) => { console.warn('[dsh-wsl-git] rail setting write failed: ' + String(error && error.message ? error.message : error)) })
+           }
+         }
+         return
+@@ -5761,7 +5769,7 @@ window.__ModuleLoader__.load({
+         const settled = Promise.resolve(active.mutate(ops)).then(
+           (accepted) => accepted !== false,
+           (error) => {
+-            console.warn('[dsh-ide-git] rail setting write failed: ' + String(error && error.message ? error.message : error))
++            console.warn('[dsh-wsl-git] rail setting write failed: ' + String(error && error.message ? error.message : error))
+             return false
+           },
+         )
+@@ -5826,14 +5834,14 @@ window.__ModuleLoader__.load({
+         const outcome = writeRailFields(ops, form)
+         if (outcome.sent !== true) {
+           railMigrating = false
+-          console.warn('[dsh-ide-git] legacy rail migration was refused (' + String(outcome.reason) + '); it stays unmarked and is retried')
++          console.warn('[dsh-wsl-git] legacy rail migration was refused (' + String(outcome.reason) + '); it stays unmarked and is retried')
+           return
+         }
+         if (outcome.settled === undefined) { done(); return }
+         void outcome.settled.then((acceptedWrite) => {
+           if (acceptedWrite === true) { done(); return }
+           railMigrating = false
+-          console.warn('[dsh-ide-git] legacy rail migration was not accepted; it stays unmarked and is retried')
++          console.warn('[dsh-wsl-git] legacy rail migration was not accepted; it stays unmarked and is retried')
+         })
+       } catch (error) { void error }
+     }
+@@ -5861,7 +5869,7 @@ window.__ModuleLoader__.load({
+        panel in the other. The bucket is therefore `chrome:wide|tall`, and what
+        is stored is a RATIO of the measured container: resizing the dock or the
+        window rescales the panes instead of breaking the layout. */
+-    const PANES_KEY = 'dsh-ide-git.panes.v1'
++    const PANES_KEY = 'dsh-wsl-git.panes.v1'
+     /* Every chrome can now move all three panes (the detail diff window used to
+        be a fixed max-height:55% in the columns chrome — user report: it could
+        not be resized). The DIFF pane is special: it is carved out of the middle
+@@ -6160,18 +6168,60 @@ window.__ModuleLoader__.load({
+       return at.getFullYear() + '/' + pad(at.getMonth() + 1) + '/' + pad(at.getDate()) + ' ' + pad(at.getHours()) + ':' + pad(at.getMinutes())
+     }
+ 
++    /* A path reaching these helpers is either a repo-relative git path or a HOST
++       path — and a host path may be a WSL UNC path, spelled with backslashes (or
++       as `//wsl.localhost/…` once the host's `repoRow` slash-normalized it).
++       Splitting on '/' alone therefore handed back a WHOLE UNC path as a single
++       label, so a WSL workspace's repository was named
++       `\\wsl.localhost\Ubuntu-24.04\home\steaf\workspace\device_xcar_1.0`
++       instead of `device_xcar_1.0`. Normalizing the separators first cannot hurt
++       a relative git path, which never contains a backslash: git prints status,
++       numstat and log paths with '/' on every platform. */
+     function baseName(filePath) {
+       if (typeof filePath !== 'string') return ''
+-      const parts = filePath.split('/')
++      const parts = filePath.replace(/\\/g, '/').split('/')
+       return parts[parts.length - 1]
+     }
+ 
+     function dirName(filePath) {
+       if (typeof filePath !== 'string') return ''
+-      const index = filePath.lastIndexOf('/')
++      /* The index is found on the normalized copy but the ORIGINAL is sliced:
++         `\` → `/` is one character for one character, so indices stay aligned. */
++      const index = filePath.replace(/\\/g, '/').lastIndexOf('/')
+       return index < 0 ? '' : filePath.slice(0, index)
+     }
+ 
++    /* ---- path labels for a WSL workspace ---- */
++    /* The path a PERSON thinks in. A WSL workspace path is a UNC share, and
++       printing `\\wsl.localhost\Ubuntu-24.04\home\steaf\workspace\x` where the
++       user is looking at `/home/steaf/workspace/x` is noise that also hides which
++       distribution the panel is talking to. These helpers are for LABELS only:
++       every request still carries the raw host path, which is the wire contract
++       the host's `requireAbsolute` enforces. */
++
++    /** The distribution a WSL UNC path names, or '' for anything else. */
++    function distroOf(hostPath) {
++      if (typeof hostPath !== 'string') return ''
++      const match = /^\/\/wsl(?:\.localhost|\$)\/([^/]+)/.exec(hostPath.replace(/\\/g, '/'))
++      return match === null || match[1] === undefined ? '' : match[1]
++    }
++
++    /** The Linux spelling of a WSL UNC path, or the path unchanged. */
++    function displayPath(hostPath) {
++      if (typeof hostPath !== 'string' || hostPath === '') return ''
++      const match = /^\/\/wsl(?:\.localhost|\$)\/[^/]+(\/.*)?$/.exec(hostPath.replace(/\\/g, '/'))
++      if (match === null) return hostPath
++      const rest = match[1] === undefined ? '' : match[1]
++      return rest === '' ? '/' : rest
++    }
++
++    /** `Ubuntu-24.04 · /home/steaf/workspace/x`, or the path alone when not WSL. */
++    function workspaceLocation(hostPath) {
++      const distro = distroOf(hostPath)
++      const shown = displayPath(hostPath)
++      return distro === '' ? shown : distro + ' · ' + shown
++    }
++
+     /* ============================== commit graph ============================== */
+ 
+     function buildRows(commits) {
+@@ -8170,7 +8220,10 @@ window.__ModuleLoader__.load({
+       const repos = props.repos
+       return E('div', { className: 'dig-picker' },
+         E('div', { className: 'dig-picker-title' }, repos.length === 0 ? t('repo.empty') : t('repo.pick')),
+-        E('div', { className: 'dig-picker-sub' }, props.cwd),
++        /* Named with its distribution: with more than one installed, the Linux
++           path alone cannot say which git answered. `title` keeps the raw host
++           path, which is what a request would carry. */
++        E('div', { className: 'dig-picker-sub', title: props.cwd }, workspaceLocation(props.cwd)),
+         repos.map((repo) => E('button', {
+           key: repo.path,
+           type: 'button',
+@@ -8181,7 +8234,7 @@ window.__ModuleLoader__.load({
+           E('span', { className: 'dig-picker-name' }, repo.name),
+           repo.branch === null || repo.branch === undefined ? null : E('span', { className: 'dig-badge' }, repo.branch),
+           E('span', { className: 'dig-picker-kind' }, repo.kind === 'workspace' ? t('repo.workspace') : t('repo.nested')),
+-          E('span', { className: 'dig-picker-path' }, repo.path))))
++          E('span', { className: 'dig-picker-path', title: repo.path }, displayPath(repo.path)))))
+     }
+ 
+     /* ============================== branch tree ============================== */
+@@ -11017,7 +11070,7 @@ window.__ModuleLoader__.load({
+        package name is the natural value, and it is also the seat key the body
+        registers under), the tab kind (unique across kinds — the shipped `git`
+        kind is not ours to take), and the guide capsule that opens the tab. */
+-    const NATIVE_ID = 'dsh-ide-git'
++    const NATIVE_ID = 'dsh-wsl-git'
+     const NATIVE_KIND = 'ide-git'
+     const NATIVE_WORKSPACE_ITEMS = (state) => state.items
+     /* The conversation.view slot id (issue #8). Order 30 sits the tab after
+@@ -11409,10 +11462,10 @@ window.__ModuleLoader__.load({
+ 
+     function apply(ctx) {
+       const style = document.createElement('style')
+-      style.setAttribute('data-dsh-ide-git', '')
++      style.setAttribute('data-dsh-wsl-git', '')
+       style.textContent = CSS
+       document.head.appendChild(style)
+-      ctx.effect(() => () => { style.remove() }, 'dsh-ide-git: panel styles')
++      ctx.effect(() => () => { style.remove() }, 'dsh-wsl-git: panel styles')
+ 
+       const t = translatorOf(ctx)
+ 
+@@ -11424,7 +11477,7 @@ window.__ModuleLoader__.load({
+       if (localeService !== undefined && typeof localeService.register === 'function') {
+         ctx.effect(
+           () => localeService.register(LOCALE_NS, Object.assign({ zh: ZH, en: EN }, LOCALES)),
+-          'dsh-ide-git: locale dictionaries',
++          'dsh-wsl-git: locale dictionaries',
+         )
+       }
+ 
+@@ -11491,7 +11544,7 @@ window.__ModuleLoader__.load({
+               try { offBody() } catch (error) { void error }
+               try { offType() } catch (error) { void error }
+             }
+-          }, 'dsh-ide-git: native right-sidebar seats')
++          }, 'dsh-wsl-git: native right-sidebar seats')
+         })
+       }
+ 
+@@ -11540,7 +11593,7 @@ window.__ModuleLoader__.load({
+             hostedByBetterSidebar = false
+             hostNatively()
+           }
+-        }, 'dsh-ide-git: Git tab')
++        }, 'dsh-wsl-git: Git tab')
+       })
+ 
+       /* ctx.inject runs its callback straight away when the service is already
+@@ -11582,7 +11635,7 @@ window.__ModuleLoader__.load({
+                    priority): better one missed re-registration — the next
+                    config change or reload retries — than a sync that throws
+                    inside every rail-config notification. */
+-                console.warn('[dsh-ide-git] conversation seat registration failed: ' + String(error && error.message ? error.message : error))
++                console.warn('[dsh-wsl-git] conversation seat registration failed: ' + String(error && error.message ? error.message : error))
+               }
+             } else if (enabled !== true && offView !== null) {
+               try { offView() } catch (error) { void error }
+@@ -11598,7 +11651,7 @@ window.__ModuleLoader__.load({
+               offView = null
+             }
+           }
+-        }, 'dsh-ide-git: conversation view tab')
++        }, 'dsh-wsl-git: conversation view tab')
+       })
+ 
+       /* ---- settings: the row Config is the rail's source of truth ---- */
+@@ -11627,7 +11680,7 @@ window.__ModuleLoader__.load({
+             if (typeof unsubscribe === 'function') unsubscribe()
+             notifyRailConfig()
+           }
+-        }, 'dsh-ide-git: row config')
++        }, 'dsh-wsl-git: row config')
+       })
+ 
+       /* The settings card, on the plugin detail page (plugins.bundle.config,
+@@ -11646,10 +11699,10 @@ window.__ModuleLoader__.load({
+           return () => {
+             try { offBundle() } catch (error) { void error }
+           }
+-        }, 'dsh-ide-git: settings card')
++        }, 'dsh-wsl-git: settings card')
+       })
+     }
+ 
+-    return { name: 'dsh-ide-git', inject: [], apply }
++    return { name: 'dsh-wsl-git', inject: [], apply }
+   },
+ })
+diff --git a/src/index.js b/src/index.js
+index 941942e..d093409 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -1,14 +1,36 @@
+ /**
+- * dsh-ide-git — host half (plain JavaScript, no build step).
++ * dsh-wsl-git — host half (plain JavaScript, no build step).
++ *
++ * A fork of dsh-ide-git 0.13.5 (MIT) whose ONE functional difference is the
++ * execution world of `git`: when the session workspace belongs to a WSL
++ * distribution, every git command runs INSIDE that distribution instead of
++ * against the Windows binary. The panel itself — routes, methods, safety
++ * semantics — is unchanged, so a workspace that is not a WSL workspace behaves
++ * exactly as the upstream plugin did.
++ *
++ * Why the fork exists: the upstream host spawns the local `git` with
++ * `node:path`'s Windows semantics, so a WSL workspace path either resolved to
++ * a drive-relative spelling that names nothing, or reached Windows git as a
++ * UNC path it cannot use as a working tree. The panel then reported
++ * "not a git repository" for a repository that exists.
+  *
+  * One HTTP surface backs the browser panel:
+  *
+- *   POST /dsh-ide-git/api/<method>   -> { ok: true, data } | { ok: false, error }
++ *   POST /dsh-wsl-git/api/<method>   -> { ok: true, data } | { ok: false, error }
++ *
++ * Every method is a thin, argv-array wrapper around `git` (never a shell
++ * string), executed with the working directory the client sent (the session
++ * scope cwd). Read methods are cheap; write methods are explicit and the
++ * destructive ones require an explicit `confirm: true` from the caller.
+  *
+- * Every method is a thin, argv-array wrapper around the local `git` binary
+- * (never a shell string), executed with the working directory the client sent
+- * (the session scope cwd). Read methods are cheap; write methods are explicit
+- * and the destructive ones require an explicit `confirm: true` from the caller.
++ * PATH CONTRACT — the load-bearing rule of this fork. Every path that crosses
++ * the HTTP boundary (in either direction) is spelled the way the HOST names it,
++ * which is the same spelling DSH stores as the session workspace: a WSL UNC
++ * path (`\\wsl.localhost\<distro>\<linux>`) for a distribution workspace, or a
++ * Windows drive path for a `/mnt/<drive>` workspace. A Linux path lives only
++ * inside `src/target.js`'s spawn boundary and never reaches the client. That is
++ * what keeps `sameDirectory`, `pathIdentity`, the repo picker and the
++ * client's per-session remembered repo all comparing one identity.
+  *
+  * Trust fence: the routes are mounted on DSH's own web server, so they are
+  * same-origin by construction. A request is served only when the Host header
+@@ -20,12 +42,15 @@ import { spawn } from 'node:child_process'
+ import { createHash } from 'node:crypto'
+ import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs'
+ import path from 'node:path'
++import { homedir } from 'node:os'
++import { describeTarget, isLinuxOnlyPath, linuxPathOf, linuxToHost, readWslWorkspaces, resolveTarget } from './target.js'
++import { gitProgramFor, gitSpawnSpec, launcherFailureOf, remoteGitMissingOf } from './wsl-git.js'
+ 
+-export const name = 'dsh-ide-git'
++export const name = 'dsh-wsl-git'
+ export const inject = ['webServer']
+ 
+ /* Row Config = the plugin's settings surface on dsh >= 0.1.7: the host persists
+-   these values under the loader row id ('ide-git', see cordis.patch.yml) and the
++   these values under the loader row id ('wsl-git', see cordis.patch.yml) and the
+    browser reads them through ctx.configForms, so the settings card on the
+    plugin's page and the action rail read ONE document. The rail's edit is one
+    switch per action (`railRefresh` … `railPush`); a missing field means "default"
+@@ -39,7 +64,7 @@ let Schema = null
+ try {
+   Schema = (await import('@deepseek-ai/schemastery')).default
+ } catch (error) {
+-  console.warn('[dsh-ide-git] @deepseek-ai/schemastery is not resolvable here; the row Config surface is absent'
++  console.warn('[dsh-wsl-git] @deepseek-ai/schemastery is not resolvable here; the row Config surface is absent'
+     + ' (the browser falls back to its localStorage rail config): ' + (error && error.message ? error.message : String(error)))
+ }
+ 
+@@ -77,12 +102,22 @@ function railConfigSchema(schema) {
+      does not mark volatile ("Config field … is not volatile"), and the settings
+      switch then rolls back silently. */
+   shape.immersive = live(schema.boolean().default(true))
++  /* WSL execution (this fork's reason to exist). Every one of these is EMPTY by
++     default, and empty means "the workspace decides": a WSL workspace path names
++     its own distribution, so the ordinary install needs no configuration at all
++     and a non-WSL workspace keeps running the local git. `distro` is the last
++     resort for a Windows workspace nothing registered in the WSL registry, and
++     `gitPath` is the git program — a Windows path for a local target, a program
++     name or distribution path for a WSL one. */
++  shape.distro = live(schema.string().default(''))
++  shape.user = live(schema.string().default(''))
++  shape.gitPath = live(schema.string().default(''))
+   return schema.object(shape)
+ }
+ 
+ export const Config = Schema === null ? undefined : railConfigSchema(Schema)
+ 
+-const ROUTE_PREFIX = '/dsh-ide-git/api'
++const ROUTE_PREFIX = '/dsh-wsl-git/api'
+ const MAX_OUTPUT_BYTES = 8 * 1024 * 1024
+ 
+ /* Ring buffer of the most recent git runs — the panel's "Git output" view
+@@ -121,23 +156,142 @@ function badRequest(message) {
+ 
+ /* ============================== argv git ============================== */
+ 
+-function gitBinary() {
+-  const override = process.env.DSH_IDE_GIT_BIN
+-  return override !== undefined && override.trim() !== '' ? override.trim() : 'git'
++/**
++ * The resolved row config, published by `apply()`.
++ *
++ * Module-level because every method is a bare function reached through the
++ * METHODS table (the upstream shape), and mutable state beside `repoScanCache`
++ * and `undoStacks` is already how this plugin is written. Empty until apply
++ * runs, and every WSL field defaults to "the workspace decides", so a call made
++ * before then still resolves the ordinary case correctly.
++ */
++let settings = {}
++
++/** The harness home — the same resolution dsh-wsl-workspace uses for its registry. */
++function dshHome() {
++  const configured = process.env.DSH_HOME
++  return configured !== undefined && configured.trim() !== '' ? configured.trim() : path.join(homedir(), '.dsh')
++}
++
++/**
++ * The execution world for one call, decided from the path the client sent.
++ *
++ * The registry is re-read per call rather than cached: it is a tiny file, and a
++ * `/mnt` workspace added in the settings dialog has to take effect on the next
++ * panel refresh rather than on the next process start.
++ */
++function targetFor(hostPath) {
++  return resolveTarget(hostPath, {
++    store: readWslWorkspaces(dshHome()),
++    distro: settings.distro,
++    user: settings.user,
++  })
+ }
+ 
+ /**
+  * Run git with an argv array (no shell). Resolves for ANY exit code so callers
+  * can decide whether a non-zero status is data (e.g. `git diff --quiet`) or an
+  * error; `git()` below is the throwing form.
++ *
++ * The world is decided per call from `cwd` (see the PATH CONTRACT in the module
++ * note): a WSL workspace runs the distribution's own git through `wsl.exe`,
++ * everything else runs the local binary exactly as the upstream plugin did.
++ *
++ * A failure of the LAUNCHER is rejected rather than resolved. It is not git's
++ * answer about the repository, and letting it through as a non-zero exit is how
++ * the upstream plugin ended up telling WSL users their repository does not
++ * exist: `repoRootOf` reads any non-zero `rev-parse` as `not-a-repo`.
+  */
+ function runGit(cwd, args, options = {}) {
++  return runGitTarget(targetFor(cwd), args, options)
++}
++
++/**
++ * The HOST spelling of an absolute path git reported.
++ *
++ * Applied ONLY to the fields that are defined to be an absolute path:
++ * `rev-parse --show-toplevel`, `rev-parse --absolute-git-dir`, and
++ * `worktree list`'s `worktree ` line. Rewriting a whole stream instead would
++ * corrupt file content — a diff body may legitimately contain an absolute Linux
++ * path, and it is not this plugin's to translate.
++ *
++ * An unmappable path throws rather than falling through as a Linux spelling: a
++ * Linux path that reached the HTTP boundary would be resolved by the host as
++ * root-relative (`/home/x` → `C:\home\x`) and silently name nothing.
++ *
++ * @param {{kind: string, distro?: string}} target - the target the call ran in.
++ * @param {string} reported - the absolute path git printed.
++ * @returns {string} the path in host spelling.
++ */
++function hostPathOf(target, reported) {
++  if (target.kind !== 'wsl') return reported
++  const mapped = linuxToHost(reported, target.distro)
++  if (mapped === null) {
++    throw new PanelError(
++      'wsl-path-unmappable',
++      `git reported "${reported}", which has no host spelling inside WSL distribution "${target.distro}"`,
++      502,
++    )
++  }
++  return mapped
++}
++
++/**
++ * {@link linuxPathOf} with the refusal made loud, for the two callers that pass an
++ * absolute path as a git ARGUMENT (`clone`'s directory, `diff --no-index`'s file).
++ *
++ * The mapping itself is pure and lives in src/target.js beside its inverse, where
++ * the unit suite can drive it without a WSL host. Returning null there and
++ * throwing here keeps that module free of this one's error type.
++ *
++ * @param {{kind: string, distro?: string, hostPath: string, linuxPath?: string}} target
++ * @param {string} hostPath - an absolute host path.
++ * @returns {string} the same path in the target's own spelling.
++ */
++function linuxSpellingOf(target, hostPath) {
++  const spelled = linuxPathOf(target, hostPath)
++  if (spelled === null) {
++    throw new PanelError(
++      'wsl-path-unmappable',
++      `"${hostPath}" has no Linux spelling for WSL distribution "${target.distro}"`,
++      502,
++    )
++  }
++  return spelled
++}
++
++/**
++ * How one run is labelled in the panel's "Git output" view (upstream 0.15.0's
++ * ring buffer).
++ *
++ * The world is named because the same git arguments now mean different programs:
++ * without it a reader cannot tell whether `status` ran inside the distribution or
++ * against the Windows binary, which is the first question a bug report asks.
++ *
++ * @param {{kind: string, distro?: string}} target - the target the call ran in.
++ * @param {string[]} args - the git arguments.
++ * @returns {string} the label.
++ */
++function logArgvOf(target, args) {
++  const text = args.join(' ')
++  return target.kind === 'wsl' ? `[${target.distro}] ${text}` : text
++}
++
++function runGitTarget(target, args, options = {}) {
+   const timeoutMs = options.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : options.timeoutMs
+   const startedAt = Date.now()
++  const spec = gitSpawnSpec(target, args, gitProgramFor(target, settings.gitPath))
++
++  /** The infrastructure failure this result represents, or null when it is git's own answer. */
++  const infrastructureFailureOf = (result) => {
++    if (target.kind !== 'wsl') return null
++    return launcherFailureOf(target, result) ?? remoteGitMissingOf(target, result)
++  }
++
+   return new Promise((resolve, reject) => {
+     let child
+     try {
+-      child = spawn(gitBinary(), args, { cwd, windowsHide: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' } })
++      child = spawn(spec.argv[0], spec.argv.slice(1), spec.options)
+     } catch (error) {
+       reject(new PanelError('git-missing', 'cannot start git: ' + messageOf(error), 500))
+       return
+@@ -172,21 +326,27 @@ function runGit(cwd, args, options = {}) {
+       if (settled) return
+       settled = true
+       clearTimeout(timer)
+-      pushGitLog({
+-        at: new Date(startedAt).toISOString(),
+-        argv: args.join(' '),
+-        code: code === null ? -1 : code,
+-        ms: Date.now() - startedAt,
+-        out: clipGitLogText(Buffer.concat(out).toString('utf8')),
+-        err: clipGitLogText(Buffer.concat(err).toString('utf8')),
+-      })
+-      resolve({
++      const result = {
+         code: code === null ? -1 : code,
+         signal: signal === null ? undefined : signal,
+         stdout: Buffer.concat(out).toString('utf8'),
+         stderr: Buffer.concat(err).toString('utf8'),
+         truncated: outBytes > MAX_OUTPUT_BYTES,
++      }
++      pushGitLog({
++        at: new Date(startedAt).toISOString(),
++        argv: logArgvOf(target, args),
++        code: result.code,
++        ms: Date.now() - startedAt,
++        out: clipGitLogText(result.stdout),
++        err: clipGitLogText(result.stderr),
+       })
++      const failure = infrastructureFailureOf(result)
++      if (failure !== null) {
++        reject(new PanelError(failure.code, failure.message, failure.code === 'git-missing' ? 500 : 502))
++        return
++      }
++      resolve(result)
+     })
+   })
+ }
+@@ -209,6 +369,16 @@ function messageOf(error) {
+ function requireAbsolute(value, label) {
+   if (typeof value !== 'string' || value.trim() === '') throw badRequest(label + ' is required')
+   if (!path.isAbsolute(value)) throw badRequest(label + ' must be an absolute path')
++  /* A Linux absolute path is "absolute" to node:path on Windows too, and that is
++     the trap this refuses: path.resolve('/home/steaf/x') yields 'C:\home\steaf\x',
++     which names nothing, so every later filesystem call would quietly miss. The
++     boundary speaks host spellings only (see the module's PATH CONTRACT), so a
++     Linux path is rejected by name rather than mangled. `//`-prefixed input is
++     left alone — that is the forward-slash spelling of a UNC path, which the
++     client legitimately sends back. */
++  if (isLinuxOnlyPath(value)) {
++    throw badRequest(label + ' must be a host path (a UNC path or a drive path), not a Linux path: ' + value)
++  }
+   return path.resolve(value)
+ }
+ 
+@@ -240,14 +410,18 @@ function cwdOf(payload) {
+ 
+ async function repoRootOf(cwd, payload) {
+   if (payload !== undefined && payload.repoRoot !== undefined) return requireAbsolute(payload.repoRoot, 'repoRoot')
+-  const result = await runGit(cwd, ['rev-parse', '--show-toplevel'])
++  const target = targetFor(cwd)
++  const result = await runGitTarget(target, ['rev-parse', '--show-toplevel'])
+   if (result.code !== 0) {
+     // A workspace that is not a repository is a normal state, not a failure:
+     // the client answers it with a repo picker instead of an error banner.
++    // (A launch failure never reaches here — runGitTarget rejects it, so this
++    // branch means git really did answer "not a repository".)
+     throw new PanelError('not-a-repo', 'not a git repository: ' + cwd, 409)
+   }
+   const top = result.stdout.trim()
+-  return top === '' ? cwd : top
++  // git answers in the world it ran in; the boundary speaks host spellings.
++  return top === '' ? cwd : hostPathOf(target, top)
+ }
+ 
+ async function currentBranchOf(root) {
+@@ -419,14 +593,17 @@ function sameDirectory(left, right) {
+ }
+ 
+ async function worktreesOf(root) {
+-  const result = await runGit(root, ['worktree', 'list', '--porcelain'])
++  const target = targetFor(root)
++  const result = await runGitTarget(target, ['worktree', 'list', '--porcelain'])
+   if (result.code !== 0) return []
+   const trees = []
+   let current = null
+   for (const line of result.stdout.split('\n')) {
+     if (line.startsWith('worktree ')) {
+       if (current !== null) trees.push(current)
+-      current = { path: line.slice('worktree '.length), branch: null, head: null, detached: false, bare: false }
++      // `worktree list` prints absolute paths, in the world git ran in; the
++      // client compares these against host paths (`sameDirectory`).
++      current = { path: hostPathOf(target, line.slice('worktree '.length)), branch: null, head: null, detached: false, bare: false }
+       continue
+     }
+     if (current === null) continue
+@@ -576,10 +753,17 @@ function snapshotState(root, files) {
+ 
+ /** .git markers that mean a multi-step operation is still in progress. */
+ async function operationOf(root) {
+-  const result = await runGit(root, ['rev-parse', '--absolute-git-dir'])
++  const target = targetFor(root)
++  const result = await runGitTarget(target, ['rev-parse', '--absolute-git-dir'])
+   if (result.code !== 0) return null
+-  const gitDir = result.stdout.trim()
+-  if (gitDir === '') return null
++  const reported = result.stdout.trim()
++  if (reported === '') return null
++  /* The markers are read from the host, so the git directory has to be named the
++     host's way first. Inside WSL that means the 9P share for an ext4 repository
++     or the drive itself for a `/mnt` one — the mapping in `hostPathOf` picks the
++     readable spelling. Without it every lookup answered false and a merge or a
++     rebase in progress went unreported. */
++  const gitDir = hostPathOf(target, reported)
+   const markers = [
+     ['merge', 'MERGE_HEAD'],
+     ['rebase', 'rebase-merge'],
+@@ -800,7 +984,14 @@ async function diff(payload) {
+     /* --no-index reads the file for real, so unlike the plain `git diff --`
+        form an absolute path must NOT be allowed to escape the repository. */
+     if (absolute !== root && !absolute.startsWith(root + path.sep)) throw badRequest('path must stay inside the repository')
+-    const result = await runGit(root, ['diff', '--no-color', '--no-ext-diff', '-U3', '--no-index', '--', '/dev/null', absolute])
++    /* The file travels as a git ARGUMENT and the header rewrite below matches it
++       LITERALLY, so both halves have to use one spelling — the world's. Handing
++       Linux git the host spelling of a path inside its own filesystem names
++       nothing, and then the rewrite would not match either, leaving the preview
++       with an absolute path in its header. */
++    const diffTarget = targetFor(root)
++    const spelled = linuxSpellingOf(diffTarget, absolute)
++    const result = await runGitTarget(diffTarget, ['diff', '--no-color', '--no-ext-diff', '-U3', '--no-index', '--', '/dev/null', spelled])
+     if (result.code !== 0 && result.code !== 1) {
+       const detail = result.stderr.trim() === '' ? result.stdout.trim() : result.stderr.trim()
+       throw new PanelError('git-failed', 'git diff --no-index failed: ' + (detail === '' ? 'exit ' + result.code : detail), 409)
+@@ -809,12 +1000,12 @@ async function diff(payload) {
+        the header lines back to the repository-relative spelling so the preview
+        reads like every other patch (body lines are left untouched). */
+     let out = result.stdout
+-    if (out.indexOf(absolute) >= 0 && out.indexOf('\n') !== -1) {
++    if (out.indexOf(spelled) >= 0 && out.indexOf('\n') !== -1) {
+       out = out.split('\n').map((line) => {
+-        if (line.startsWith('diff --git ') && line.indexOf(absolute) >= 0) return 'diff --git a/' + rel + ' b/' + rel
++        if (line.startsWith('diff --git ') && line.indexOf(spelled) >= 0) return 'diff --git a/' + rel + ' b/' + rel
+         /* the b/ side of --no-index carries the absolute path verbatim (its
+-           leading slash merged into the separator): match '+++ b' + absolute. */
+-        if (line.startsWith('+++ b' + absolute)) return '+++ b/' + rel
++           leading slash merged into the separator): match '+++ b' + spelled. */
++        if (line.startsWith('+++ b' + spelled)) return '+++ b/' + rel
+         return line
+       }).join('\n')
+     }
+@@ -1132,7 +1323,11 @@ function requireUrl(value, label) {
+ async function clone(payload) {
+   const url = requireUrl(payload.url, 'url')
+   const dir = requireAbsolute(payload.dir, 'dir')
+-  await git(path.dirname(dir), ['clone', url, dir], { timeoutMs: CLONE_TIMEOUT_MS })
++  /* The target directory travels as a git ARGUMENT, so it must be spelled the way
++     the world that runs git spells it. The answer still echoes the HOST spelling
++     the caller asked for: this is an argument site, not an output site. */
++  const parent = path.dirname(dir)
++  await git(parent, ['clone', url, linuxSpellingOf(targetFor(parent), dir)], { timeoutMs: CLONE_TIMEOUT_MS })
+   return { dir }
+ }
+ 
+@@ -1170,7 +1365,7 @@ async function undoApply(payload) {
+     if (exists.code === 0) throw new PanelError('undo-conflict', 'branch "' + entry.name + '" already exists again', 409)
+     await git(root, ['branch', entry.name, entry.hash])
+   } else if (entry.kind === 'stash-drop') {
+-    await git(root, ['stash', 'store', '-m', 'dsh-ide-git: restored ' + entry.label, entry.hash])
++    await git(root, ['stash', 'store', '-m', 'dsh-wsl-git: restored ' + entry.label, entry.hash])
+   } else if (entry.kind === 'discard') {
+     // Refuse to trample anything typed since the discard: every target must
+     // still look exactly the way the discard left it.
+@@ -1190,6 +1385,24 @@ async function undoApply(payload) {
+       mkdirSync(path.dirname(target), { recursive: true })
+       writeFileSync(target, file.data)
+     }
++    /* Read back what was written, because inside WSL these bytes reach the
++       repository through the 9P share and a write that did not land must not be
++       reported as a restore. The snapshot is the user's ONLY copy of the
++       discarded content, so a silent miss here is unrecoverable data loss rather
++       than a cosmetic failure. The undo entry is deliberately still on the stack
++       when this throws — the caller can fix the cause and retry instead of
++       losing the bytes to a consumed handle. */
++    const expectedAfter = entry.files.map((file) => ({ rel: file.rel, hash: file.data === null ? null : hashOf(file.data) }))
++    const actualAfter = snapshotState(root, entry.files)
++    for (let position = 0; position < actualAfter.length; position += 1) {
++      if (actualAfter[position].hash !== expectedAfter[position].hash) {
++        throw new PanelError(
++          'undo-not-restored',
++          'the discarded content of "' + entry.files[position].rel + '" did not reach the repository; nothing else was undone',
++          500,
++        )
++      }
++    }
+   } else {
+     throw new PanelError('undo-unsupported', 'this action cannot be undone', 500)
+   }
+@@ -1307,12 +1520,16 @@ async function collectSubmoduleRepos(root) {
+     if (!existsSync(path.join(absolute, '.git'))) continue
+     candidates.push({ absolute, rel })
+   }
+-  const tops = await Promise.all(candidates.map((entry) => runGit(entry.absolute, ['rev-parse', '--show-toplevel'])))
++  const tops = await Promise.all(candidates.map((entry) => {
++    const target = targetFor(entry.absolute)
++    return runGitTarget(target, ['rev-parse', '--show-toplevel']).then((result) => ({ target, result }))
++  }))
+   for (let index = 0; index < candidates.length; index += 1) {
+-    const top = tops[index]
+-    if (top.code !== 0) continue
+-    const reported = top.stdout.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+-    found.push({ root: reported === '' ? candidates[index].absolute : reported, rel: candidates[index].rel })
++    const { target, result } = tops[index]
++    if (result.code !== 0) continue
++    const reported = result.stdout.trim()
++    const rooted = reported === '' ? candidates[index].absolute : hostPathOf(target, reported)
++    found.push({ root: rooted.replace(/\\/g, '/').replace(/\/+$/, ''), rel: candidates[index].rel })
+   }
+   return found
+ }
+@@ -1342,11 +1559,18 @@ async function scanRepos(cwd) {
+     return { cached: true, rows: cached.rows.map((row) => ({ ...row })) }
+   }
+   const list = []
+-  const self = await runGit(cwd, ['rev-parse', '--show-toplevel'])
++  const target = targetFor(cwd)
++  const self = await runGitTarget(target, ['rev-parse', '--show-toplevel'])
+   const isRepo = self.code === 0
+   if (isRepo) {
+     const top = self.stdout.trim()
+-    list.push(repoRow(top === '' ? cwd : top, undefined, 'workspace'))
++    /* git answers in the world it ran in, and this row's `path` becomes the
++       `repoRoot` every later request carries. Left as the raw Linux path it would
++       resolve as neither a UNC path nor a registered drive workspace, fall back to
++       the LOCAL git, and then be handed to spawn as a cwd node reads as
++       `C:\home\...` — measured: `repos` failed with `cannot run git: spawn git
++       ENOENT` while every method that already passed through `hostPathOf` worked. */
++    list.push(repoRow(top === '' ? cwd : hostPathOf(target, top), undefined, 'workspace'))
+   }
+   for (const dir of findNestedRepos(cwd, 2)) list.push(repoRow(dir, undefined, 'nested'))
+   /* Submodules of EVERY discovered checkout, not only a workspace that is one:
+@@ -1417,11 +1641,28 @@ async function repos(payload) {
+   return { cwd, isRepo: rows.some((row) => row.kind === 'workspace'), repos: rows, ...(cached ? { cached: true } : {}) }
+ }
+ 
+-async function version() {
+-  const result = await runGit(process.cwd(), ['--version'])
++/**
++ * The git this panel will actually run.
++ *
++ * The payload may carry a `cwd`. With one, the answer describes the git of THAT
++ * workspace's world — which is the only version that explains what the panel
++ * does, and the reason this method is target-aware at all. Without one (the
++ * upstream call shape, used by probes) it stays the local binary.
++ */
++async function version(payload) {
++  const cwd = payload !== undefined && typeof payload.cwd === 'string' && payload.cwd.trim() !== ''
++    ? requireAbsolute(payload.cwd, 'cwd')
++    : process.cwd()
++  const target = targetFor(cwd)
++  const result = await runGitTarget(target, ['--version'])
+   const raw = result.code === 0 ? result.stdout.trim() : ''
+   const match = /git version (\S+)/.exec(raw)
+-  return { git: match === null ? raw : match[1], available: result.code === 0 }
++  return {
++    git: match === null ? raw : match[1],
++    available: result.code === 0,
++    world: target.kind,
++    target: describeTarget(target),
++  }
+ }
+ 
+ function optionalPaths(payload, label) {
+@@ -1877,10 +2118,28 @@ async function handle(req, res) {
+   }
+ }
+ 
+-export function apply(ctx) {
++/**
++ * Mount the plugin.
++ *
++ * `config` is the row's resolved settings, whose WSL fields are all EMPTY by
++ * default and empty means "the workspace decides" — so publishing it verbatim is
++ * both the configured behaviour and the unconfigured one.
++ *
++ * @param {*} ctx - the host context (needs `webServer`).
++ * @param {{distro?: string, user?: string, gitPath?: string}} [config] - the row config.
++ */
++export function apply(ctx, config) {
++  const resolved = config === undefined || config === null ? {} : config
++  settings = {
++    distro: typeof resolved.distro === 'string' ? resolved.distro : '',
++    user: typeof resolved.user === 'string' ? resolved.user : '',
++    gitPath: typeof resolved.gitPath === 'string' ? resolved.gitPath : '',
++  }
++  ctx.effect(() => () => { settings = {} }, 'dsh-wsl-git: WSL execution settings')
++
+   ctx.effect(
+     () => ctx.webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler: handle }),
+-    'dsh-ide-git: /dsh-ide-git/api git routes',
++    'dsh-wsl-git: /dsh-wsl-git/api git routes',
+   )
+   /* AI commit message (issue #6). `llm` and `sessions` are injected HERE and not
+      in `export const inject`: a host without them must still load the whole
+@@ -1893,6 +2152,6 @@ export function apply(ctx) {
+     injected.effect(() => {
+       commitServices = { llm: llm, sessions: sessions }
+       return () => { commitServices = null }
+-    }, 'dsh-ide-git: ai commit message')
++    }, 'dsh-wsl-git: ai commit message')
+   })
+ }
+diff --git a/src/target.js b/src/target.js
+new file mode 100644
+index 0000000..6e14d8a
+--- /dev/null
++++ b/src/target.js
+@@ -0,0 +1,479 @@
++/**
++ * dsh-wsl-git — workspace target resolution and path translation.
++ *
++ * Two jobs:
++ *
++ *  1. Decide WHICH git executes a request, from the workspace path alone. A WSL
++ *     workspace path already names its own distribution — DSH stores it as
++ *     `\\wsl.localhost\<distro>\<linux>` — so nothing here is hard-coded and no
++ *     configuration is required for the ordinary case.
++ *  2. Translate between the two spellings a path has in this plugin: the HOST
++ *     spelling the HTTP boundary speaks (a WSL UNC path, or a Windows drive
++ *     path) and the LINUX spelling the distribution's git needs.
++ *
++ * Everything except {@link readWslWorkspaces} is a pure function, which is what
++ * makes the whole contract testable without a WSL host (tests/target.test.mjs).
++ *
++ * The path helpers are PORTED from dsh-wsl-workspace's `src/shared/paths.ts`
++ * rather than imported: that package exports only `.`, `./shell`, `./fs` and
++ * `./client`, so its helpers have no importable subpath and a sibling plugin's
++ * internals are not a dependency surface. They are pinned by this plugin's own
++ * tests instead.
++ *
++ * @module dsh-wsl-git/target
++ */
++
++import { readFileSync } from 'node:fs'
++import { isAbsolute, join, relative, resolve, sep } from 'node:path'
++
++/* ============================== UNC parsing ============================== */
++
++/** WSL2 default loopback bridge host: `\\wsl.localhost\<distro>\...`. */
++const WSL_LOCALHOST_HOST = 'wsl.localhost'
++/** Legacy WSL interop host: `\\wsl$\<distro>\...`. */
++const WSL_LEGACY_HOST = 'wsl$'
++/** The two UNC hosts WSL exposes a distribution's filesystem under. */
++const UNC_HOSTS = [WSL_LOCALHOST_HOST, WSL_LEGACY_HOST]
++
++/** Linux username shape, matching `wsl.exe -u` and the upstream plugin. */
++const WSL_USERNAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/
++
++/** A Windows drive path: `C:\foo` or `C:/foo`. */
++const DRIVE_PATH_PATTERN = /^([A-Za-z]):[\\/](.*)$/
++
++function messageOf(error) {
++  return error instanceof Error ? error.message : String(error)
++}
++
++/**
++ * Parse a WSL UNC path into its distribution and Linux path.
++ *
++ * Accepts the WSL2 `\\wsl.localhost\<distro>\<linux>` form, the legacy
++ * `\\wsl$\<distro>\<linux>` interop form, and forward-slash spellings of
++ * either — the client sends repo roots back with `/` separators
++ * (`repoRow` slash-normalizes them), so the forward form is the one that
++ * actually arrives on the wire.
++ *
++ * @param {unknown} raw - candidate absolute path.
++ * @returns {{distro: string, linuxPath: string} | null} the parsed target, or
++ *   null when the path is not a WSL UNC.
++ */
++export function parseWslUnc(raw) {
++  if (typeof raw !== 'string' || raw === '') return null
++  const normalized = raw.replace(/\\/g, '/').replace(/\/\/+/g, '//')
++  if (!normalized.startsWith('//')) return null
++  const segments = normalized.slice(2).split('/')
++  const host = (segments[0] === undefined ? '' : segments[0]).toLowerCase()
++  if (!UNC_HOSTS.includes(host)) return null
++  const distro = segments[1] === undefined ? '' : segments[1]
++  if (distro === '') return null
++  const rest = segments.slice(2).filter(segment => segment.length > 0)
++  return { distro: distro, linuxPath: '/' + rest.join('/') }
++}
++
++/** Whether a value is an absolute, non-empty Linux path. */
++export function isAbsoluteLinuxPath(value) {
++  return typeof value === 'string' && value.startsWith('/') && !value.includes('\0')
++}
++
++/**
++ * The Linux spelling of a host absolute path — the INVERSE of
++ * {@link linuxToHost}, for the few values that are git ARGUMENTS rather than git
++ * output.
++ *
++ * Upstream 0.15.0 introduced two calls that pass an absolute path as an argument:
++ * `clone`'s target directory and `diff --no-index`'s file. Handing the
++ * distribution's git the Windows or UNC spelling of a path inside its own
++ * filesystem names nothing, and the failure is quiet — an empty patch, or a
++ * `not a git repository` about a directory that is one.
++ *
++ * A path outside the target's own root is still expressible when it lives on a
++ * drvfs mount (`/mnt/<drive>`), which is how a WSL workspace reaches a Windows
++ * drive. Anything else — another distribution's filesystem, for instance — has no
++ * spelling this world can open, and returns null so the caller can refuse it by
++ * name instead of guessing.
++ *
++ * @param {{kind: string, hostPath: string, linuxPath?: string}} target - the resolved target.
++ * @param {string} hostPath - an absolute host path.
++ * @returns {string | null} the path in the target's own spelling, or null when it has none.
++ */
++export function linuxPathOf(target, hostPath) {
++  if (target === null || typeof target !== 'object') return null
++  if (typeof hostPath !== 'string' || hostPath === '') return null
++  // A local target already speaks host paths: the same string is the right answer.
++  if (target.kind !== 'wsl') return hostPath
++  if (typeof target.linuxPath !== 'string' || target.linuxPath === '') return null
++  const resolved = resolve(hostPath)
++  const root = resolve(target.hostPath)
++  const inside = relative(root, resolved)
++  if (inside === '' || (!inside.startsWith('..') && !isAbsolute(inside))) {
++    const suffix = inside === '' ? '' : '/' + inside.split(sep).join('/')
++    return normalizeLinuxPath(target.linuxPath + suffix)
++  }
++  return windowsToMntPath(resolved)
++}
++
++/**
++ * Whether a value is a Linux-only absolute path — one that is NOT also a host
++ * path, and therefore must never cross the HTTP boundary.
++ *
++ * `node:path` on Windows calls `/home/steaf/x` "absolute" and then resolves it to
++ * `C:\home\steaf\x`, a path that names nothing; every later filesystem call
++ * misses silently. So the boundary refuses these by name instead. A
++ * `//`-prefixed value is excluded because that IS a host path: it is the
++ * forward-slash spelling of a UNC path, which is what the client sends back
++ * after `repoRow` slash-normalized a repository root.
++ *
++ * @param {unknown} value - the candidate.
++ * @returns {boolean} true when the value is Linux-only.
++ */
++export function isLinuxOnlyPath(value) {
++  return typeof value === 'string' && value.startsWith('/') && !value.startsWith('//')
++}
++
++/**
++ * Normalize a Linux absolute path: collapse repeated slashes, strip a trailing
++ * slash (root stays `/`).
++ * @param {string} value - absolute Linux path.
++ * @returns {string} the normalized path.
++ */
++export function normalizeLinuxPath(value) {
++  const collapsed = value.replace(/\/+/g, '/')
++  return collapsed === '/' ? '/' : collapsed.replace(/\/$/, '')
++}
++
++/**
++ * Join a distribution and a Linux absolute path into the WSL2 UNC form used as
++ * the workspace identity (`\\wsl.localhost\<distro>\<linux>`, backslash
++ * segments) — the same spelling DSH stores as the session workspace path.
++ * @param {string} distro - distribution name.
++ * @param {string} linuxPath - absolute Linux path.
++ * @returns {string} the UNC path.
++ */
++export function joinUnc(distro, linuxPath) {
++  if (!isAbsoluteLinuxPath(linuxPath)) {
++    throw new Error(`dsh-wsl-git: cannot map a non-absolute Linux path "${linuxPath}" to UNC`)
++  }
++  // Defense in depth: a distribution name carrying a separator or a dot-dir
++  // would escape the `\\wsl.localhost\` share structure. Names reaching here
++  // come from a workspace path or the registry, but the fence is cheap.
++  if (distro === '' || distro === '.' || distro === '..' || /[\\/]/.test(distro)) {
++    throw new Error(`dsh-wsl-git: invalid distribution name "${distro}"`)
++  }
++  const normalized = normalizeLinuxPath(linuxPath)
++  const withoutLeading = normalized.startsWith('/') ? normalized.slice(1) : normalized
++  const windowsSegments = withoutLeading.replace(/\//g, '\\')
++  const suffix = windowsSegments === '' ? '' : `\\${windowsSegments}`
++  return `\\\\wsl.localhost\\${distro}${suffix}`
++}
++
++/**
++ * Canonicalize any accepted WSL UNC spelling into the registry's key form.
++ * @param {string} value - candidate workspace path.
++ * @returns {string | null} the canonical UNC path, or null when not a WSL UNC.
++ */
++export function canonicalWslUnc(value) {
++  const parsed = parseWslUnc(value)
++  return parsed === null ? null : joinUnc(parsed.distro, parsed.linuxPath)
++}
++
++/**
++ * Canonical Windows drive path for registry keys and cross-realm identity:
++ * separators unified to `\`, trailing separator stripped, and the WHOLE path
++ * lowercased — Windows paths compare case-insensitively and the registry may
++ * realpath a different casing than the caller spelled.
++ * @param {unknown} value - candidate Windows drive path.
++ * @returns {string | null} the canonical form, or null when not drive-shaped.
++ */
++export function canonicalWindowsPath(value) {
++  if (typeof value !== 'string') return null
++  const match = DRIVE_PATH_PATTERN.exec(value)
++  if (match === null) return null
++  const rest = (match[2] === undefined ? '' : match[2]).replace(/[\\/]+/g, '\\').replace(/\\$/, '').toLowerCase()
++  return `${(match[1] === undefined ? '' : match[1]).toLowerCase()}:\\${rest}`
++}
++
++/**
++ * Translate a Windows drive path to the drvfs mount path WSL distributions
++ * conventionally expose it at (`C:\foo` → `/mnt/c/foo`). Only single-letter
++ * drives under `/mnt` are mapped; custom mount points are out of scope.
++ * @param {string} value - the candidate Windows path.
++ * @returns {string | null} the `/mnt/<drive>/…` path, or null.
++ */
++export function windowsToMntPath(value) {
++  if (typeof value !== 'string') return null
++  const match = DRIVE_PATH_PATTERN.exec(value)
++  if (match === null) return null
++  const rest = (match[2] === undefined ? '' : match[2]).replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '')
++  return `/mnt/${(match[1] === undefined ? '' : match[1]).toLowerCase()}${rest === '' ? '' : `/${rest}`}`
++}
++
++/**
++ * Translate a `/mnt/<drive>/…` path back to its Windows drive path.
++ * @param {string} value - the candidate Linux path.
++ * @returns {string | null} the `X:\…` drive path, or null.
++ */
++export function mntToWindowsPath(value) {
++  if (typeof value !== 'string') return null
++  const match = /^\/mnt\/([a-zA-Z])(?:\/(.*))?$/.exec(value)
++  if (match === null) return null
++  const rest = (match[2] === undefined ? '' : match[2]).replace(/\//g, '\\')
++  return `${(match[1] === undefined ? '' : match[1]).toUpperCase()}:\\${rest}`
++}
++
++/** Whether a value is a safe Linux username for `wsl.exe -u`. */
++export function isValidWslUsername(value) {
++  return typeof value === 'string' && WSL_USERNAME_PATTERN.test(value)
++}
++
++/* ============================== direction mapping ============================== */
++
++/**
++ * The HOST spelling of an absolute Linux path — the spelling the host process
++ * can actually open, and the one the HTTP boundary uses.
++ *
++ * The split is not cosmetic. The 9P share that serves `\\wsl.localhost\…` covers
++ * only the distribution's ext4 volume: a drvfs mount (`/mnt/<drive>`) answers
++ * Access denied there (measured: `readdirSync('\\\\wsl.localhost\\Ubuntu-24.04\\mnt\\c')`
++ * → EPERM), so those paths must travel as their drive letter — which is also
++ * how DSH registers a `/mnt` workspace in the first place.
++ *
++ * @param {string} linuxPath - absolute Linux path.
++ * @param {string} distro - the distribution the path lives in.
++ * @returns {string | null} the host spelling, or null when it cannot be named.
++ */
++export function linuxToHost(linuxPath, distro) {
++  if (!isAbsoluteLinuxPath(linuxPath)) return null
++  // A `//`-prefixed spelling is already a UNC host path, not a Linux one.
++  if (linuxPath.startsWith('//')) return null
++  const drive = mntToWindowsPath(linuxPath)
++  if (drive !== null) return drive
++  if (distro === undefined || distro === '') return null
++  return joinUnc(distro, linuxPath)
++}
++
++/**
++ * The Linux spelling of a host path, plus which kind of host path it was.
++ *
++ * Returns null for a Windows drive path: a drive path *can* be `/mnt/<drive>`,
++ * but only the registry knows whether that drive is a WSL workspace, and
++ * guessing would hand a Linux path to a distribution that never owned the
++ * directory. {@link resolveTarget} makes that call.
++ *
++ * @param {string} hostPath - a UNC or drive path.
++ * @returns {{kind: 'unc' | 'drive', distro?: string, linuxPath: string} | null}
++ */
++export function hostToLinux(hostPath) {
++  const unc = parseWslUnc(hostPath)
++  if (unc !== null) return { kind: 'unc', distro: unc.distro, linuxPath: unc.linuxPath }
++  const mnt = windowsToMntPath(hostPath)
++  if (mnt !== null) return { kind: 'drive', linuxPath: mnt }
++  return null
++}
++
++/* ============================== the workspace registry ============================== */
++
++/**
++ * Read DSH's WSL workspace registry (`<dshHome>/wsl-workspaces.json`).
++ *
++ * This is the file dsh-wsl-workspace writes when a workspace is added, and it is
++ * the only place a `/mnt/<drive>` workspace's distribution is recorded: 9P
++ * cannot serve drvfs, so such a workspace registers under its Windows drive path
++ * with the distribution stored beside it.
++ *
++ * A missing file reads as empty — most installs have no `/mnt` workspace, and
++ * the plugin must load there. A file that exists but cannot be read is reported
++ * rather than swallowed, because the symptom of the silent version is a `/mnt`
++ * workspace quietly running Windows git.
++ *
++ * @param {string} dshHome - the harness home directory.
++ * @returns {Record<string, {username?: string, distro?: string}>} the registry.
++ */
++export function readWslWorkspaces(dshHome) {
++  const file = join(dshHome, 'wsl-workspaces.json')
++  let raw
++  try {
++    raw = readFileSync(file, 'utf8')
++  } catch (error) {
++    if (error !== null && typeof error === 'object' && error.code === 'ENOENT') return {}
++    console.warn(`[dsh-wsl-git] cannot read ${file}: ${messageOf(error)} — a workspace registered by drive path will fall back to the Windows git`)
++    return {}
++  }
++  try {
++    const parsed = JSON.parse(raw)
++    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
++      console.warn(`[dsh-wsl-git] ${file} does not hold a JSON object; ignoring it`)
++      return {}
++    }
++    return parsed
++  } catch (error) {
++    console.warn(`[dsh-wsl-git] ${file} is not valid JSON: ${messageOf(error)}; ignoring it`)
++    return {}
++  }
++}
++
++/** Whether one Linux path contains another, at a separator boundary. */
++function containsLinuxPath(outer, inner) {
++  if (outer === inner) return true
++  const prefix = outer.endsWith('/') ? outer : outer + '/'
++  return inner.startsWith(prefix)
++}
++
++/** A registry value, or undefined when it is not an object. */
++function asEntry(value) {
++  return value === undefined || value === null || typeof value !== 'object' ? undefined : value
++}
++
++/**
++ * The registry entry governing a host path, by the LONGEST registered key that
++ * contains it — for both spellings a workspace can have.
++ *
++ * Containment, not equality, is what makes the resolution stable across a whole
++ * request. Discovery resolves the WORKSPACE path, but nearly every later call
++ * passes the REPO ROOT git reported — the workspace itself for a single-repo
++ * workspace, a subdirectory for a container one, a submodule path at any depth.
++ * An equality-only lookup misses there, and the miss is silent in the worst way:
++ * a drive path would drop back to the Windows git (the panel lists WSL
++ * repositories and then fails to read any of them), and a UNC path would lose the
++ * workspace's configured Linux user and quietly run as the distribution default.
++ *
++ * The two spellings compare differently, for a reason. A drive path is
++ * case-insensitive (Windows), so both sides go through
++ * {@link canonicalWindowsPath}. A UNC path carries a LINUX path, where case is
++ * meaningful — `\\wsl.localhost\Ubuntu-24.04\Home` and `\home` are different
++ * directories — so those compare through their Linux spellings, exactly.
++ *
++ * @param {Record<string, unknown>} store - the registry.
++ * @param {string} hostPath - a host path: a WSL UNC path or a Windows drive path.
++ * @returns {{username?: string, distro?: string} | undefined} the entry, or undefined.
++ */
++export function lookupEntry(store, hostPath) {
++  const target = parseWslUnc(hostPath)
++  if (target !== null) {
++    const wanted = normalizeLinuxPath(target.linuxPath)
++    let bestLength = -1
++    let best
++    for (const [storedKey, entry] of Object.entries(store)) {
++      const stored = parseWslUnc(storedKey)
++      // A registry key for a different distribution describes a different world,
++      // even when the Linux path is identical.
++      if (stored === null || stored.distro !== target.distro) continue
++      if (!containsLinuxPath(normalizeLinuxPath(stored.linuxPath), wanted)) continue
++      if (stored.linuxPath.length > bestLength) {
++        bestLength = stored.linuxPath.length
++        best = entry
++      }
++    }
++    return asEntry(best)
++  }
++
++  const key = canonicalWindowsPath(hostPath)
++  if (key === null) return undefined
++  let bestKey = null
++  let best
++  for (const [storedKey, entry] of Object.entries(store)) {
++    // Only drive-shaped stored keys can govern a drive path; the UNC keys in the
++    // same registry describe a different kind of workspace.
++    if (canonicalWindowsPath(storedKey) === null) continue
++    if (key !== storedKey && !key.startsWith(storedKey + '\\')) continue
++    if (bestKey === null || storedKey.length > bestKey.length) {
++      bestKey = storedKey
++      best = entry
++    }
++  }
++  return asEntry(best)
++}
++
++/* ============================== target resolution ============================== */
++
++/** Distinguish why a target came out the way it did (diagnostics + tests). */
++export const TARGET_SOURCE = {
++  /** The workspace path is a WSL UNC path; the distribution is in the path. */
++  UNC: 'unc',
++  /** A drive path registered as a WSL workspace; the distribution came from the registry. */
++  DRIVE_WORKSPACE: 'drive-workspace',
++  /** A drive path with no registry entry, mapped only because a distro was configured. */
++  CONFIGURED_DISTRO: 'configured-distro',
++  /** Not a WSL workspace: the local git binary runs, exactly as upstream. */
++  LOCAL: 'local',
++}
++
++/** Round-trip a trimmed string option, treating blank and absent alike. */
++function option(value) {
++  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
++}
++
++/** The Linux user for a workspace: registry first, then config, then the env override. */
++function resolveUser(stored, configured) {
++  const fromEnv = option(process.env.DSH_WSL_USER)
++  for (const candidate of [stored, configured, fromEnv]) {
++    if (candidate !== undefined && isValidWslUsername(candidate)) return candidate
++  }
++  return undefined
++}
++
++/**
++ * Decide which git runs a request, from the path the client sent.
++ *
++ * Order, and why:
++ *  1. A WSL UNC path names its own distribution. The workspace always wins over
++ *     configuration — that is what makes this plugin general rather than
++ *     installed-for-one-machine.
++ *  2. A drive path registered in the WSL workspace registry belongs to the
++ *     distribution stored there, at its `/mnt/<drive>` spelling.
++ *  3. A configured `distro` covers a drive path nothing registered. Off by
++ *     default; with it empty, an unregistered drive path is an ordinary Windows
++ *     workspace.
++ *  4. Anything else is local: the Windows git binary, unchanged.
++ *
++ * @param {string} hostPath - the workspace or repo-root path the client sent.
++ * @param {{store?: Record<string, unknown>, distro?: string, user?: string}} [options]
++ * @returns {{kind: 'wsl'|'local', hostPath: string, source: string, distro?: string,
++ *   user?: string, linuxPath?: string}} the target.
++ */
++export function resolveTarget(hostPath, options = {}) {
++  const store = options.store === undefined || options.store === null ? {} : options.store
++  const configuredDistro = option(options.distro)
++  const configuredUser = option(options.user)
++
++  const unc = parseWslUnc(hostPath)
++  if (unc !== null) {
++    const entry = lookupEntry(store, hostPath)
++    return {
++      kind: 'wsl',
++      hostPath: hostPath,
++      source: TARGET_SOURCE.UNC,
++      distro: unc.distro,
++      user: resolveUser(entry === undefined ? undefined : entry.username, configuredUser),
++      linuxPath: unc.linuxPath,
++    }
++  }
++
++  const entry = lookupEntry(store, hostPath)
++  const entryDistro = entry !== undefined && typeof entry.distro === 'string' && entry.distro !== '' ? entry.distro : undefined
++  const distro = entryDistro === undefined ? configuredDistro : entryDistro
++  const linuxPath = distro === undefined ? null : windowsToMntPath(hostPath)
++  if (distro !== undefined && linuxPath !== null) {
++    return {
++      kind: 'wsl',
++      hostPath: hostPath,
++      source: entryDistro === undefined ? TARGET_SOURCE.CONFIGURED_DISTRO : TARGET_SOURCE.DRIVE_WORKSPACE,
++      distro: distro,
++      user: resolveUser(entry === undefined ? undefined : entry.username, configuredUser),
++      linuxPath: linuxPath,
++    }
++  }
++
++  return { kind: 'local', hostPath: hostPath, source: TARGET_SOURCE.LOCAL }
++}
++
++/**
++ * A target named the way a person reads it, for error messages and logs.
++ * @param {{kind: string, distro?: string, linuxPath?: string, hostPath: string}} target
++ * @returns {string} e.g. `Ubuntu-24.04:/home/steaf/workspace/x`, or `local:<path>`.
++ */
++export function describeTarget(target) {
++  if (target.kind !== 'wsl') return `local git in ${target.hostPath}`
++  const user = target.user === undefined ? '' : `${target.user}@`
++  return `${user}${target.distro}:${target.linuxPath}`
++}
+diff --git a/src/wsl-git.js b/src/wsl-git.js
+new file mode 100644
+index 0000000..5d81c08
+--- /dev/null
++++ b/src/wsl-git.js
+@@ -0,0 +1,225 @@
++/**
++ * dsh-wsl-git — the WSL transport: how a git command is spelled for a target,
++ * and how a failure of the LAUNCHER is told apart from a failure of git.
++ *
++ * Everything here is a pure function over a target and an argv, so the whole
++ * transport contract is asserted without a WSL host (tests/target.test.mjs).
++ * The spawn itself stays in src/index.js, because that is where `PanelError`
++ * lives and the HTTP surface needs one error taxonomy.
++ *
++ * The argv shape is not invented here — it is the one the installed WSL plugins
++ * already use and that is known to work on this host:
++ *
++ *   dsh-wsl-tool/lib/runner.js:257-264           ['wsl.exe', -d…, -u…, '-e', 'bash', '-lc', script]
++ *   dsh-wsl-workspace/src/host/wsl-bash-tool.ts  ['wsl.exe', -d…, -u…, '--cd', dir, '-e', 'bash', …]
++ *
++ * Two deliberate differences:
++ *
++ *  1. `git -C <dir>` instead of `--cd <dir>`. `--cd` needs a wsl.exe new enough
++ *     to have it; `-C` needs only git. It also keeps the whole call an argv
++ *     array with NO shell, so a commit message containing a quote, a newline or
++ *     a `$` crosses the boundary exactly as written.
++ *  2. The git environment travels as `-e env KEY=VALUE git …` rather than through
++ *     `WSLENV`. That keeps the mutation local to this one call instead of
++ *     editing a variable the user and every other plugin share.
++ *
++ * @module dsh-wsl-git/wsl-git
++ */
++
++/** The WSL launcher. */
++export const WSL_EXE = 'wsl.exe'
++
++/** The git program to run when nothing overrides it. */
++export const DEFAULT_GIT = 'git'
++
++/** git settings this plugin has always forced, for the local and WSL worlds alike. */
++const GIT_ENV = {
++  GIT_OPTIONAL_LOCKS: '0',
++  GIT_TERMINAL_PROMPT: '0',
++}
++
++/** Round-trip a trimmed string option, treating blank and absent alike. */
++function option(value) {
++  return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
++}
++
++/**
++ * The git program for a target: the world-specific environment override, then
++ * the plugin setting, then `git`.
++ *
++ * `DSH_IDE_GIT_BIN` keeps its upstream meaning (the LOCAL binary) so an existing
++ * install is not silently reconfigured; `DSH_WSL_GIT_BIN` is its sibling for the
++ * program looked up INSIDE the distribution, which is a different namespace —
++ * a Windows path there would name nothing.
++ *
++ * @param {{kind: string}} target - the resolved target.
++ * @param {string} [configured] - the plugin's `gitPath` setting.
++ * @param {NodeJS.ProcessEnv} [env] - environment to read overrides from.
++ * @returns {string} the program to execute.
++ */
++export function gitProgramFor(target, configured, env = process.env) {
++  const override = target.kind === 'wsl' ? option(env.DSH_WSL_GIT_BIN) : option(env.DSH_IDE_GIT_BIN)
++  if (override !== undefined) return override
++  const setting = option(configured)
++  return setting === undefined ? DEFAULT_GIT : setting
++}
++
++/**
++ * The argv one WSL git call is made of.
++ *
++ * `-d` and `-u` are launcher options and sit before `-e`, which is what makes
++ * the rest the distribution's own argv. The distribution is never omitted: this
++ * machine's default distribution is a different one than the workspace's, so
++ * letting wsl.exe choose would run the wrong git against the wrong filesystem.
++ *
++ * @param {{distro: string, user?: string, linuxPath: string}} target - a WSL target.
++ * @param {readonly string[]} args - git arguments, shell-free.
++ * @param {string} program - the git program, as the distribution sees it.
++ * @returns {string[]} the argv for `spawn`.
++ */
++export function buildWslArgv(target, args, program) {
++  const argv = [WSL_EXE, '-d', target.distro]
++  if (target.user !== undefined && target.user !== '') argv.push('-u', target.user)
++  argv.push(
++    '-e', 'env',
++    `GIT_TERMINAL_PROMPT=${GIT_ENV.GIT_TERMINAL_PROMPT}`,
++    `GIT_OPTIONAL_LOCKS=${GIT_ENV.GIT_OPTIONAL_LOCKS}`,
++    program,
++    '-C', target.linuxPath,
++  )
++  for (const arg of args) argv.push(arg)
++  return argv
++}
++
++/**
++ * The environment for the `wsl.exe` process itself.
++ *
++ * `WSL_UTF8=1` is load-bearing rather than cosmetic: without it wsl.exe writes
++ * its own diagnostics as UTF-16, and `Buffer.toString('utf8')` turns
++ * `Wsl/E_ACCESSDENIED` into a string no pattern here can match — measured on
++ * this host as mojibake ending in `W s l / E _ A C C E S S D E N I E D`.
++ *
++ * @param {NodeJS.ProcessEnv} [base] - the environment to extend.
++ * @returns {Record<string, string>} the child environment.
++ */
++export function wslEnv(base = process.env) {
++  const merged = {}
++  for (const [key, value] of Object.entries(base)) {
++    if (value !== undefined) merged[key] = value
++  }
++  merged.WSL_UTF8 = '1'
++  return merged
++}
++
++/**
++ * The argv and spawn options for one git call.
++ *
++ * The `cwd` of a WSL call is deliberately NOT the workspace path. Spawning a
++ * Windows child with a UNC working directory is a documented Node/Windows edge
++ * (`dsh-wsl-workspace/src/host/wsl-bash-tool.ts:399-401` says the same about its
++ * own spawn), and `git -C` has already decided the Linux side, so the Windows
++ * side only has to be a directory that exists.
++ *
++ * @param {{kind: string, distro?: string, user?: string, linuxPath?: string, hostPath: string}} target
++ * @param {readonly string[]} args - git arguments.
++ * @param {string} program - the git program.
++ * @returns {{argv: string[], options: {cwd: string, env: Record<string, string>, windowsHide: boolean}}}
++ */
++export function gitSpawnSpec(target, args, program) {
++  if (target.kind === 'wsl') {
++    return {
++      argv: buildWslArgv(target, args, program),
++      options: {
++        cwd: option(process.env.SystemRoot) === undefined ? 'C:\\Windows' : process.env.SystemRoot,
++        env: wslEnv(),
++        windowsHide: true,
++      },
++    }
++  }
++  return {
++    argv: [program, ...args],
++    options: {
++      cwd: target.hostPath,
++      env: { ...process.env, ...GIT_ENV },
++      windowsHide: true,
++    },
++  }
++}
++
++/* ============================== failure classification ============================== */
++
++/**
++ * Recover ASCII from a diagnostic that may have arrived as UTF-16.
++ *
++ * The `WSL_UTF8` variable is the fix; this is the belt to its braces, because
++ * the launcher's OWN errors are exactly the ones emitted before the variable is
++ * honoured. UTF-16LE ASCII read as UTF-8 is the same bytes interleaved with
++ * NULs, so dropping NULs recovers the text.
++ *
++ * @param {string} text - the decoded stream.
++ * @returns {string} text safe to pattern-match against.
++ */
++export function normalizeDiagnostic(text) {
++  return typeof text === 'string' ? text.replace(/\0/g, '') : ''
++}
++
++/** The WSL launcher's own failure codes, locale-independent unlike their messages. */
++const LAUNCHER_CODE_PATTERN = /Wsl\/(?:Service\/)?([A-Za-z][A-Za-z0-9_]*)/
++
++/** Markers wsl.exe prints when `-e` could not find the program to execute. */
++const EXEC_MISSING_PATTERN = /execvpe|command not found|No such file or directory/i
++
++/**
++ * Describe a WSL launcher failure, or null when this result is not one.
++ *
++ * This is the difference between the bug this plugin fixes and a different bug
++ * wearing its clothes: without it, a launch failure reaches `repoRootOf`, whose
++ * non-zero `rev-parse` means "not a git repository", and the panel tells the
++ * user their WSL repository does not exist.
++ *
++ * @param {{distro: string}} target - the WSL target the call was made for.
++ * @param {{code: number, stdout: string, stderr: string}} result - the finished call.
++ * @returns {{code: string, message: string} | null} the classified failure.
++ */
++export function launcherFailureOf(target, result) {
++  if (result.code === 0) return null
++  const text = normalizeDiagnostic(`${result.stderr}\n${result.stdout}`)
++  const match = LAUNCHER_CODE_PATTERN.exec(text)
++  if (match === null) return null
++  const detail = normalizeDiagnostic(result.stderr).trim().split(/\r?\n/)[0] ?? ''
++  const name = match[1] === undefined ? 'unknown' : match[1]
++  if (/DISTRO_NOT_FOUND|E_DISTRO/i.test(name)) {
++    return {
++      code: 'wsl-distro-missing',
++      message: `WSL distribution "${target.distro}" is not registered. Run \`wsl -l -v\` to list the available distributions, `
++        + 'or add this workspace again so it names one that exists.',
++    }
++  }
++  return {
++    code: 'wsl-launcher',
++    message: `the WSL launcher failed for "${target.distro}" (${name})${detail === '' ? '' : `: ${detail}`}. `
++      + 'Check that WSL is healthy (`wsl --status`).',
++  }
++}
++
++/**
++ * Describe a `git` that is missing INSIDE the distribution, or null.
++ *
++ * Only exit 127 with an exec marker counts. Matching the message alone would
++ * misread ordinary git errors that legitimately say "No such file or directory"
++ * about a path the user typed.
++ *
++ * @param {{distro: string}} target - the WSL target the call was made for.
++ * @param {{code: number, stdout: string, stderr: string}} result - the finished call.
++ * @returns {{code: string, message: string} | null} the classified failure.
++ */
++export function remoteGitMissingOf(target, result) {
++  if (result.code !== 127) return null
++  const text = normalizeDiagnostic(`${result.stderr}\n${result.stdout}`)
++  if (!EXEC_MISSING_PATTERN.test(text)) return null
++  return {
++    code: 'git-missing',
++    message: `git is not available inside WSL distribution "${target.distro}". `
++      + `Install it there (\`wsl -d ${target.distro} -- sudo apt install git\`) or point the plugin's "git path" setting at it.`,
++  }
++}
+diff --git a/tests/target.test.mjs b/tests/target.test.mjs
+new file mode 100644
+index 0000000..f9acc14
+--- /dev/null
++++ b/tests/target.test.mjs
+@@ -0,0 +1,504 @@
++/**
++ * dsh-wsl-git — the pure contract.
++ *
++ * Everything the plugin decides WITHOUT touching a WSL host: which git executes
++ * a request, how a path is spelled on the way in and on the way out, what argv
++ * one WSL call is made of, and how a failure of the launcher is told apart from
++ * an answer from git. Those are the decisions that go wrong silently, so they are
++ * the ones pinned here; the end-to-end behaviour needs a real distribution and is
++ * covered by the acceptance run instead.
++ *
++ * Run: node --test tests/target.test.mjs
++ */
++
++import assert from 'node:assert/strict'
++import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import test from 'node:test'
++
++import {
++  canonicalWindowsPath,
++  canonicalWslUnc,
++  describeTarget,
++  hostToLinux,
++  isAbsoluteLinuxPath,
++  isLinuxOnlyPath,
++  isValidWslUsername,
++  joinUnc,
++  linuxPathOf,
++  linuxToHost,
++  lookupEntry,
++  mntToWindowsPath,
++  normalizeLinuxPath,
++  parseWslUnc,
++  readWslWorkspaces,
++  resolveTarget,
++  TARGET_SOURCE,
++  windowsToMntPath,
++} from '../src/target.js'
++import {
++  buildWslArgv,
++  gitProgramFor,
++  gitSpawnSpec,
++  launcherFailureOf,
++  normalizeDiagnostic,
++  remoteGitMissingOf,
++  wslEnv,
++  WSL_EXE,
++} from '../src/wsl-git.js'
++
++/* The shapes this host actually has: an Ubuntu-24.04 workspace stored as a UNC
++   path, and an Ubuntu-20.04 one, so a test can prove the distribution comes from
++   the path rather than from any constant. */
++const UNC = '\\\\wsl.localhost\\Ubuntu-24.04\\home\\steaf\\workspace\\device_xcar_1.0'
++const UNC_SLASHED = '//wsl.localhost/Ubuntu-24.04/home/steaf/workspace/device_xcar_1.0'
++const UNC_OTHER_DISTRO = '\\\\wsl.localhost\\Ubuntu-20.04\\home\\steaf\\neptune_os_utils'
++
++/* ============================== UNC parsing ============================== */
++
++test('parseWslUnc reads both hosts and both separator spellings', () => {
++  const expected = { distro: 'Ubuntu-24.04', linuxPath: '/home/steaf/workspace/device_xcar_1.0' }
++  assert.deepEqual(parseWslUnc(UNC), expected)
++  // The forward-slash form is the one that actually arrives: the host's repoRow
++  // slash-normalizes every discovery row before the client ever sees it.
++  assert.deepEqual(parseWslUnc(UNC_SLASHED), expected)
++  assert.deepEqual(parseWslUnc('\\\\wsl$\\Ubuntu-24.04\\home\\steaf'), { distro: 'Ubuntu-24.04', linuxPath: '/home/steaf' })
++  assert.deepEqual(parseWslUnc('//wsl$/Ubuntu-24.04/home/steaf'), { distro: 'Ubuntu-24.04', linuxPath: '/home/steaf' })
++})
++
++test('parseWslUnc normalizes a distro root and a trailing separator', () => {
++  assert.deepEqual(parseWslUnc('\\\\wsl.localhost\\Ubuntu-24.04'), { distro: 'Ubuntu-24.04', linuxPath: '/' })
++  assert.deepEqual(parseWslUnc('\\\\wsl.localhost\\Ubuntu-24.04\\'), { distro: 'Ubuntu-24.04', linuxPath: '/' })
++  assert.deepEqual(parseWslUnc(UNC + '\\\\'), { distro: 'Ubuntu-24.04', linuxPath: '/home/steaf/workspace/device_xcar_1.0' })
++})
++
++test('parseWslUnc keeps a distribution name that contains a space', () => {
++  // WSL allows these, and dsh-wsl-workspace documents the same pattern.
++  assert.deepEqual(parseWslUnc('\\\\wsl.localhost\\Ubuntu 24.04\\home'), { distro: 'Ubuntu 24.04', linuxPath: '/home' })
++})
++
++test('parseWslUnc refuses anything that is not a WSL UNC', () => {
++  for (const value of ['C:\\Users\\steaf', '/home/steaf', '\\\\server\\share\\x', '\\\\wsl.localhost', '\\\\wsl.localhost\\', '', 'relative/path', null, undefined, 42]) {
++    assert.equal(parseWslUnc(value), null, `expected null for ${JSON.stringify(value)}`)
++  }
++})
++
++test('joinUnc round-trips and fences the share structure', () => {
++  assert.equal(joinUnc('Ubuntu-24.04', '/home/steaf'), '\\\\wsl.localhost\\Ubuntu-24.04\\home\\steaf')
++  assert.equal(joinUnc('Ubuntu-24.04', '/'), '\\\\wsl.localhost\\Ubuntu-24.04')
++  assert.equal(joinUnc('Ubuntu-24.04', '/home/steaf/'), '\\\\wsl.localhost\\Ubuntu-24.04\\home\\steaf')
++  assert.equal(canonicalWslUnc(UNC_SLASHED), UNC)
++  // A name with a separator or a dot-dir would escape the share root.
++  assert.throws(() => joinUnc('../evil', '/home'))
++  assert.throws(() => joinUnc('a\\b', '/home'))
++  assert.throws(() => joinUnc('Ubuntu-24.04', 'not/absolute'))
++})
++
++/* ============================== drive spelling ============================== */
++
++test('windowsToMntPath and mntToWindowsPath are inverses', () => {
++  assert.equal(windowsToMntPath('C:\\Users\\steaf'), '/mnt/c/Users/steaf')
++  assert.equal(windowsToMntPath('d:/workspace/x'), '/mnt/d/workspace/x')
++  assert.equal(windowsToMntPath('C:\\'), '/mnt/c')
++  assert.equal(mntToWindowsPath('/mnt/c/Users/steaf'), 'C:\\Users\\steaf')
++  assert.equal(mntToWindowsPath('/mnt/d'), 'D:\\')
++  assert.equal(mntToWindowsPath('/mnt/c'), 'C:\\')
++  assert.equal(windowsToMntPath('\\\\wsl.localhost\\Ubuntu\\home'), null)
++  assert.equal(mntToWindowsPath('/home/steaf'), null)
++  assert.equal(mntToWindowsPath('/mnt/cc/x'), null)
++})
++
++test('canonicalWindowsPath lowercases, unifies separators and strips a trailing one', () => {
++  assert.equal(canonicalWindowsPath('C:\\Users\\Me\\'), 'c:\\users\\me')
++  assert.equal(canonicalWindowsPath('c:/users/me'), 'c:\\users\\me')
++  assert.equal(canonicalWindowsPath('C:\\Users\\Me'), canonicalWindowsPath('c:\\users\\me'))
++  assert.equal(canonicalWindowsPath('\\\\wsl.localhost\\Ubuntu\\home'), null)
++})
++
++/* ============================== direction mapping ============================== */
++
++test('linuxToHost names an ext4 path through its distribution and a drvfs path by drive', () => {
++  // ext4: only the 9P share can serve it, so it travels as a UNC path.
++  assert.equal(linuxToHost('/home/steaf/workspace/x', 'Ubuntu-24.04'), '\\\\wsl.localhost\\Ubuntu-24.04\\home\\steaf\\workspace\\x')
++  /* drvfs: the share answers Access denied for /mnt (measured on this host:
++     readdirSync('\\\\wsl.localhost\\Ubuntu-24.04\\mnt\\c') → EPERM), so it must
++     travel as the drive letter. This branch is why the mapping is not "always UNC". */
++  assert.equal(linuxToHost('/mnt/c/Users/steaf', 'Ubuntu-24.04'), 'C:\\Users\\steaf')
++  assert.equal(linuxToHost('/mnt/d/x', 'Ubuntu-24.04'), 'D:\\x')
++  // A path that is already a host spelling, and a relative one, are not ours.
++  assert.equal(linuxToHost('//wsl.localhost/Ubuntu-24.04/home', 'Ubuntu-24.04'), null)
++  assert.equal(linuxToHost('home/steaf', 'Ubuntu-24.04'), null)
++  // An ext4 path with no distribution cannot be named.
++  assert.equal(linuxToHost('/home/steaf', undefined), null)
++  assert.equal(linuxToHost('/home/steaf', ''), null)
++})
++
++test('hostToLinux reports which kind of host path it was', () => {
++  assert.deepEqual(hostToLinux(UNC), { kind: 'unc', distro: 'Ubuntu-24.04', linuxPath: '/home/steaf/workspace/device_xcar_1.0' })
++  assert.deepEqual(hostToLinux(UNC_SLASHED), { kind: 'unc', distro: 'Ubuntu-24.04', linuxPath: '/home/steaf/workspace/device_xcar_1.0' })
++  assert.deepEqual(hostToLinux('C:\\Users\\steaf'), { kind: 'drive', linuxPath: '/mnt/c/Users/steaf' })
++  assert.equal(hostToLinux('/home/steaf'), null)
++  assert.equal(hostToLinux('relative'), null)
++})
++
++/* The regression this pairing exists for.
++ *
++ * `rev-parse --show-toplevel` answers in the world git ran in, so a WSL call
++ * returns a LINUX path. Every absolute path git reports therefore has to go
++ * through `linuxToHost` before it becomes a target again — and one site
++ * (`scanRepos`) originally did not, which was measured end to end as
++ * `repos` failing with `cannot run git: spawn git ENOENT` while `summary`,
++ * `branches`, `log` and `commitDetail` all worked on the same workspace. The
++ * negative control below is what makes the positive one meaningful: it pins the
++ * exact wrong answer the missing mapping produced. */
++const GIT_TOPLEVEL = '/home/steaf/workspace/device_xcar_1.0'
++
++test('a git toplevel maps back to the same WSL target (the repos ENOENT regression)', () => {
++  const hostPath = linuxToHost(GIT_TOPLEVEL, 'Ubuntu-24.04')
++  assert.equal(hostPath, UNC)
++  const roundTrip = resolveTarget(hostPath, { store: {} })
++  assert.equal(roundTrip.kind, 'wsl', 'the mapped path must still resolve to the distribution')
++  assert.equal(roundTrip.distro, 'Ubuntu-24.04')
++  // Closed: what git printed is what the next request runs against.
++  assert.equal(roundTrip.linuxPath, GIT_TOPLEVEL)
++})
++
++test('an unmapped Linux path silently becomes the LOCAL world (why the mapping is mandatory)', () => {
++  // Exactly what the missing `hostPathOf` did: not a UNC path, no registry entry,
++  // so it fell through to the local git and then to spawn with a cwd of
++  // `C:\home\steaf\...`, which does not exist.
++  const naive = resolveTarget(GIT_TOPLEVEL, { store: {} })
++  assert.equal(naive.kind, 'local')
++  assert.equal(naive.source, TARGET_SOURCE.LOCAL)
++})
++
++test('isLinuxOnlyPath is the guard requireAbsolute applies to wire input', () => {
++  assert.equal(isLinuxOnlyPath('/home/steaf/x'), true)
++  assert.equal(isLinuxOnlyPath('/mnt/c/Users/steaf'), true)
++  // A forward-slash UNC path is a HOST path: the client legitimately sends it
++  // back after repoRow slash-normalizes a repository root.
++  assert.equal(isLinuxOnlyPath('//wsl.localhost/Ubuntu-24.04/home'), false)
++  assert.equal(isLinuxOnlyPath('\\\\wsl.localhost\\Ubuntu-24.04\\home'), false)
++  assert.equal(isLinuxOnlyPath('C:\\Users\\steaf'), false)
++  assert.equal(isLinuxOnlyPath(null), false)
++})
++
++test('normalizeLinuxPath and isAbsoluteLinuxPath agree on the edge cases', () => {
++  assert.equal(normalizeLinuxPath('/home//steaf/'), '/home/steaf')
++  assert.equal(normalizeLinuxPath('/'), '/')
++  assert.equal(isAbsoluteLinuxPath('/x'), true)
++  assert.equal(isAbsoluteLinuxPath('x'), false)
++  assert.equal(isAbsoluteLinuxPath('/x\0y'), false)
++})
++
++/* ============================== registry lookup ============================== */
++
++test('lookupEntry finds a drive workspace by containment, not equality', () => {
++  const store = {
++    'c:\\users\\steaf\\workspace': { distro: 'Ubuntu-24.04', username: 'steaf' },
++    'd:\\other': { distro: 'Ubuntu-20.04' },
++  }
++  assert.equal(lookupEntry(store, 'C:\\Users\\steaf\\workspace')?.distro, 'Ubuntu-24.04')
++  /* The load-bearing case: discovery resolves the workspace, but every later call
++     passes the REPO ROOT git reported. An equality-only lookup misses here and
++     drops those calls back to the Windows git. */
++  assert.equal(lookupEntry(store, 'C:\\Users\\steaf\\workspace\\myrepo')?.distro, 'Ubuntu-24.04')
++  assert.equal(lookupEntry(store, 'c:\\USERS\\steaf\\workspace\\myrepo\\sub')?.distro, 'Ubuntu-24.04')
++  /* A sibling whose name merely starts with the same letters is NOT inside it. */
++  assert.equal(lookupEntry(store, 'C:\\Users\\steaf\\workspace-other'), undefined)
++  assert.equal(lookupEntry(store, 'C:\\Users\\steaf'), undefined)
++  assert.equal(lookupEntry({}, 'C:\\Users\\steaf\\workspace'), undefined)
++})
++
++test('lookupEntry prefers the longest registered key', () => {
++  const store = {
++    'c:\\ws': { distro: 'Ubuntu-20.04' },
++    'c:\\ws\\inner': { distro: 'Ubuntu-24.04', username: 'steaf' },
++  }
++  assert.equal(lookupEntry(store, 'C:\\ws\\inner\\repo')?.distro, 'Ubuntu-24.04')
++  assert.equal(lookupEntry(store, 'C:\\ws\\other')?.distro, 'Ubuntu-20.04')
++})
++
++test('lookupEntry matches a UNC workspace by containment, inside its own distribution', () => {
++  const store = {
++    '\\\\wsl.localhost\\Ubuntu-24.04\\home\\steaf\\workspace': { username: 'steaf' },
++  }
++  assert.equal(lookupEntry(store, UNC)?.username, 'steaf')
++  // A submodule or a nested repository keeps the workspace's configured user.
++  assert.equal(lookupEntry(store, '\\\\wsl.localhost\\Ubuntu-24.04\\home\\steaf\\workspace\\a\\b')?.username, 'steaf')
++  // A different distribution is a different world, even at the same Linux path.
++  assert.equal(lookupEntry(store, '\\\\wsl.localhost\\Ubuntu-20.04\\home\\steaf\\workspace\\x'), undefined)
++  // The Linux path is case-SENSITIVE: /Home is not /home.
++  assert.equal(lookupEntry(store, '\\\\wsl.localhost\\Ubuntu-24.04\\Home\\steaf\\workspace\\x'), undefined)
++  // And a UNC key must not govern a drive path.
++  assert.equal(lookupEntry(store, 'C:\\Users\\steaf\\workspace'), undefined)
++})
++
++/* ============================== target resolution ============================== */
++
++test('a WSL workspace path names its own distribution', () => {
++  const one = resolveTarget(UNC, { store: {} })
++  assert.equal(one.kind, 'wsl')
++  assert.equal(one.distro, 'Ubuntu-24.04')
++  assert.equal(one.linuxPath, '/home/steaf/workspace/device_xcar_1.0')
++  assert.equal(one.source, TARGET_SOURCE.UNC)
++
++  const two = resolveTarget(UNC_OTHER_DISTRO, { store: {} })
++  assert.equal(two.distro, 'Ubuntu-20.04')
++  assert.equal(two.linuxPath, '/home/steaf/neptune_os_utils')
++})
++
++test('the workspace distribution beats a configured one', () => {
++  // This is what makes the plugin general: the configured value is a fallback,
++  // never an override, so one install serves every distribution.
++  const target = resolveTarget(UNC, { store: {}, distro: 'Debian' })
++  assert.equal(target.distro, 'Ubuntu-24.04')
++  assert.equal(target.source, TARGET_SOURCE.UNC)
++})
++
++test('a registered drive workspace runs in WSL at its /mnt spelling', () => {
++  const store = { 'c:\\users\\steaf\\proj': { distro: 'Ubuntu-24.04', username: 'steaf' } }
++  const target = resolveTarget('C:\\Users\\steaf\\proj\\repo', { store })
++  assert.equal(target.kind, 'wsl')
++  assert.equal(target.distro, 'Ubuntu-24.04')
++  assert.equal(target.user, 'steaf')
++  assert.equal(target.linuxPath, '/mnt/c/Users/steaf/proj/repo')
++  assert.equal(target.source, TARGET_SOURCE.DRIVE_WORKSPACE)
++})
++
++test('an unregistered drive path is an ordinary Windows workspace', () => {
++  const target = resolveTarget('C:\\Users\\steaf\\plain', { store: {} })
++  assert.equal(target.kind, 'local')
++  assert.equal(target.source, TARGET_SOURCE.LOCAL)
++  assert.equal(target.hostPath, 'C:\\Users\\steaf\\plain')
++})
++
++test('a configured distribution covers an unregistered drive path, and says so', () => {
++  const target = resolveTarget('C:\\Users\\steaf\\plain', { store: {}, distro: 'Ubuntu-24.04' })
++  assert.equal(target.kind, 'wsl')
++  assert.equal(target.distro, 'Ubuntu-24.04')
++  assert.equal(target.linuxPath, '/mnt/c/Users/steaf/plain')
++  assert.equal(target.source, TARGET_SOURCE.CONFIGURED_DISTRO)
++})
++
++test('the Linux user resolves from the workspace, then config, then the environment', () => {
++  const store = { '\\\\wsl.localhost\\Ubuntu-24.04\\home\\steaf': { username: 'fromstore' } }
++  assert.equal(resolveTarget('\\\\wsl.localhost\\Ubuntu-24.04\\home\\steaf\\x', { store }).user, 'fromstore')
++  // The workspace's own setting wins over a configured one.
++  assert.equal(resolveTarget('\\\\wsl.localhost\\Ubuntu-24.04\\home\\steaf\\x', { store, user: 'fromconfig' }).user, 'fromstore')
++  assert.equal(resolveTarget('\\\\wsl.localhost\\Ubuntu-24.04\\elsewhere', { store, user: 'fromconfig' }).user, 'fromconfig')
++  // An invalid name is not a crash, it is simply not a user.
++  assert.equal(resolveTarget('\\\\wsl.localhost\\Ubuntu-24.04\\elsewhere', { store: {}, user: '-rm -rf /' }).user, undefined)
++  assert.equal(resolveTarget('\\\\wsl.localhost\\Ubuntu-24.04\\elsewhere', { store: {} }).user, undefined)
++})
++
++test('isValidWslUsername refuses anything that could be read as an option', () => {
++  assert.equal(isValidWslUsername('steaf'), true)
++  assert.equal(isValidWslUsername('_a.b-c'), true)
++  assert.equal(isValidWslUsername('-root'), false)
++  assert.equal(isValidWslUsername(''), false)
++  assert.equal(isValidWslUsername('a b'), false)
++})
++
++test('describeTarget names the world a person reads', () => {
++  assert.equal(describeTarget(resolveTarget(UNC, { store: {} })), 'Ubuntu-24.04:/home/steaf/workspace/device_xcar_1.0')
++  assert.equal(describeTarget(resolveTarget(UNC, { store: {}, user: 'steaf' })), 'steaf@Ubuntu-24.04:/home/steaf/workspace/device_xcar_1.0')
++  assert.equal(describeTarget(resolveTarget('C:\\plain', { store: {} })), 'local git in C:\\plain')
++})
++
++/* ============================== the registry file ============================== */
++
++test('readWslWorkspaces tolerates a missing, corrupt or non-object file', () => {
++  const dir = mkdtempSync(join(tmpdir(), 'dsh-wsl-git-'))
++  try {
++    // Absent: most installs have no /mnt workspace, and the plugin must load.
++    assert.deepEqual(readWslWorkspaces(dir), {})
++
++    writeFileSync(join(dir, 'wsl-workspaces.json'), '{"c:\\\\ws":{"distro":"Ubuntu-24.04"}}', 'utf8')
++    assert.equal(readWslWorkspaces(dir)['c:\\ws']?.distro, 'Ubuntu-24.04')
++
++    writeFileSync(join(dir, 'wsl-workspaces.json'), '{ this is not json', 'utf8')
++    assert.deepEqual(readWslWorkspaces(dir), {})
++
++    writeFileSync(join(dir, 'wsl-workspaces.json'), '["a list"]', 'utf8')
++    assert.deepEqual(readWslWorkspaces(dir), {})
++  } finally {
++    rmSync(dir, { recursive: true, force: true })
++  }
++})
++
++/* ============================== the transport ============================== */
++
++test('gitProgramFor keeps the two worlds\u2019 overrides apart', () => {
++  const wsl = { kind: 'wsl' }
++  const local = { kind: 'local' }
++  assert.equal(gitProgramFor(wsl, '', {}), 'git')
++  assert.equal(gitProgramFor(local, '', {}), 'git')
++  assert.equal(gitProgramFor(wsl, '/usr/bin/git', {}), '/usr/bin/git')
++  assert.equal(gitProgramFor(local, 'C:\\git\\git.exe', {}), 'C:\\git\\git.exe')
++  assert.equal(gitProgramFor(wsl, '', { DSH_WSL_GIT_BIN: '/opt/git' }), '/opt/git')
++  assert.equal(gitProgramFor(local, '', { DSH_IDE_GIT_BIN: 'C:\\git.exe' }), 'C:\\git.exe')
++  /* A Windows path set for one world must never be handed to the other: it would
++     name nothing inside the distribution, and vice versa. */
++  assert.equal(gitProgramFor(wsl, '', { DSH_IDE_GIT_BIN: 'C:\\git.exe' }), 'git')
++  assert.equal(gitProgramFor(local, '', { DSH_WSL_GIT_BIN: '/opt/git' }), 'git')
++})
++
++test('buildWslArgv spells the call the way the working plugins do', () => {
++  const target = { kind: 'wsl', distro: 'Ubuntu-24.04', linuxPath: '/home/steaf/ws' }
++  assert.deepEqual(buildWslArgv(target, ['status', '--porcelain=v1', '-z'], 'git'), [
++    WSL_EXE, '-d', 'Ubuntu-24.04',
++    '-e', 'env', 'GIT_TERMINAL_PROMPT=0', 'GIT_OPTIONAL_LOCKS=0',
++    'git', '-C', '/home/steaf/ws',
++    'status', '--porcelain=v1', '-z',
++  ])
++  // `-u` is a launcher option and sits before `-e`.
++  assert.deepEqual(buildWslArgv({ ...target, user: 'steaf' }, ['--version'], 'git'), [
++    WSL_EXE, '-d', 'Ubuntu-24.04', '-u', 'steaf',
++    '-e', 'env', 'GIT_TERMINAL_PROMPT=0', 'GIT_OPTIONAL_LOCKS=0',
++    'git', '-C', '/home/steaf/ws', '--version',
++  ])
++})
++
++test('the distribution is always named, never left to wsl.exe', () => {
++  /* This host's default distribution is Ubuntu-20.04 while the workspace under
++     test is Ubuntu-24.04, so dropping `-d` would run the wrong git against the
++     wrong filesystem. */
++  const argv = buildWslArgv({ kind: 'wsl', distro: 'Ubuntu-24.04', linuxPath: '/' }, ['status'], 'git')
++  const index = argv.indexOf('-d')
++  assert.ok(index >= 0, 'expected -d in the argv')
++  assert.equal(argv[index + 1], 'Ubuntu-24.04')
++})
++
++test('arguments cross the boundary verbatim, with no shell to reinterpret them', () => {
++  /* The whole reason for the argv (rather than a bash -lc script) shape: a commit
++     message containing a quote, a newline, a `$` or a backtick is data, not code. */
++  const message = 'fix: don\'t run `rm -rf $HOME`\n\nsecond line'
++  const argv = buildWslArgv({ kind: 'wsl', distro: 'Ubuntu-24.04', linuxPath: '/ws' }, ['commit', '-m', message], 'git')
++  assert.ok(argv.includes(message), 'the message must appear as ONE argv element')
++  assert.equal(argv[argv.length - 1], message)
++  assert.equal(argv.filter((entry) => entry === message).length, 1)
++  // A path with a space is one element too.
++  const spaced = buildWslArgv({ kind: 'wsl', distro: 'Ubuntu-24.04', linuxPath: '/home/my dir' }, ['add', '--', 'a b.txt'], 'git')
++  assert.ok(spaced.includes('/home/my dir'))
++  assert.ok(spaced.includes('a b.txt'))
++})
++
++test('a WSL spawn never uses the UNC workspace as its Windows cwd', () => {
++  const target = resolveTarget(UNC, { store: {} })
++  const spec = gitSpawnSpec(target, ['status'], 'git')
++  /* Spawning a Windows child with a UNC working directory is a documented
++     Node/Windows edge, and `git -C` already decides the Linux side. */
++  assert.ok(!spec.options.cwd.startsWith('\\\\'), `cwd must not be a UNC path, got ${spec.options.cwd}`)
++  assert.ok(!spec.options.cwd.startsWith('//'))
++  assert.equal(spec.options.windowsHide, true)
++  // UTF-16 diagnostics would be unreadable to every classifier downstream.
++  assert.equal(spec.options.env.WSL_UTF8, '1')
++  assert.equal(spec.argv[0], WSL_EXE)
++})
++
++test('a local spawn is byte-for-byte what the upstream plugin ran', () => {
++  const target = resolveTarget('C:\\Users\\steaf\\plain', { store: {} })
++  const spec = gitSpawnSpec(target, ['status'], 'git')
++  assert.deepEqual(spec.argv, ['git', 'status'])
++  assert.equal(spec.options.cwd, 'C:\\Users\\steaf\\plain')
++  assert.equal(spec.options.env.GIT_OPTIONAL_LOCKS, '0')
++  assert.equal(spec.options.env.GIT_TERMINAL_PROMPT, '0')
++  // The WSL-only variable must not leak into the local world.
++  assert.equal(spec.options.env.WSL_UTF8, undefined)
++})
++
++test('wslEnv adds WSL_UTF8 without dropping the environment Windows needs', () => {
++  const env = wslEnv({ SystemRoot: 'C:\\Windows', PATH: 'x' })
++  assert.equal(env.WSL_UTF8, '1')
++  assert.equal(env.SystemRoot, 'C:\\Windows')
++  assert.equal(env.PATH, 'x')
++})
++
++/* ============================== argument-site mapping ============================== */
++
++/* Upstream 0.15.0 introduced two calls that pass an absolute path as a git
++ * ARGUMENT rather than reading one back from git's output: `clone`'s target
++ * directory, and `diff --no-index`'s file for an untracked preview. `linuxToHost`
++ * covers the output direction; `linuxPathOf` is its inverse, and the round trip
++ * between them is the invariant that keeps a rebase honest — a new upstream call
++ * that passes a path as an argument reintroduces exactly the defect this fork
++ * exists to remove. */
++
++test('linuxPathOf spells an argument the way the world that runs git spells it', () => {
++  const target = resolveTarget(UNC, { store: {} })
++  // The workspace itself, a file inside it, and a deeper path.
++  assert.equal(linuxPathOf(target, UNC), '/home/steaf/workspace/device_xcar_1.0')
++  assert.equal(linuxPathOf(target, UNC + '\\src\\main.c'), '/home/steaf/workspace/device_xcar_1.0/src/main.c')
++  assert.equal(linuxPathOf(target, UNC_SLASHED + '/a/b'), '/home/steaf/workspace/device_xcar_1.0/a/b')
++  // No doubled separator, whatever spelling came in.
++  assert.equal(linuxPathOf(target, UNC + '\\'), '/home/steaf/workspace/device_xcar_1.0')
++})
++
++test('linuxPathOf round-trips with linuxToHost inside the target root', () => {
++  const target = resolveTarget(UNC, { store: {} })
++  const reported = '/home/steaf/workspace/device_xcar_1.0/src/main.c'
++  // git prints the Linux spelling; the host maps it out and back again unchanged.
++  const host = linuxToHost(reported, 'Ubuntu-24.04')
++  assert.equal(host, UNC + '\\src\\main.c')
++  assert.equal(linuxPathOf(target, host), reported)
++})
++
++test('linuxPathOf leaves a local target alone and refuses the unmappable', () => {
++  const local = resolveTarget('C:\\Users\\steaf\\plain', { store: {} })
++  // A local world already speaks host paths: the same string is the right answer.
++  assert.equal(linuxPathOf(local, 'C:\\Users\\steaf\\plain\\a.txt'), 'C:\\Users\\steaf\\plain\\a.txt')
++
++  const target = resolveTarget(UNC, { store: {} })
++  /* Outside the workspace but on a drvfs mount: still expressible, and it MUST go
++     through the drive letter — the 9P share answers EPERM for /mnt. */
++  assert.equal(linuxPathOf(target, 'C:\\Users\\steaf\\other'), '/mnt/c/Users/steaf/other')
++  /* Outside both: another distribution's filesystem has no spelling this world can
++     open. Null, so the caller refuses it by name instead of handing git nonsense. */
++  assert.equal(linuxPathOf(target, UNC_OTHER_DISTRO), null)
++  // Degenerate input is a null, not a throw.
++  assert.equal(linuxPathOf(target, ''), null)
++  assert.equal(linuxPathOf(null, 'C:\\x'), null)
++})
++
++/* ============================== failure classification ============================== */
++
++test('a launcher failure is named instead of being read as "not a repository"', () => {
++  const target = { kind: 'wsl', distro: 'Ubuntu-24.04' }
++  // The code is locale-independent, unlike the message around it.
++  const missing = launcherFailureOf(target, { code: -1, stdout: '', stderr: 'Wsl/Service/WSL_E_DISTRO_NOT_FOUND\r\n' })
++  assert.equal(missing?.code, 'wsl-distro-missing')
++  assert.match(missing.message, /Ubuntu-24\.04/)
++
++  // Observed on this host when a sandboxed process ran `wsl.exe -e`.
++  const denied = launcherFailureOf(target, { code: -1, stdout: '', stderr: '出现了错误。 Wsl/E_ACCESSDENIED 由于权限问题' })
++  assert.equal(denied?.code, 'wsl-launcher')
++  assert.match(denied.message, /E_ACCESSDENIED/)
++
++  assert.equal(launcherFailureOf(target, { code: 0, stdout: 'ok', stderr: '' }), null)
++  // git's own complaint must NOT be misread as an infrastructure failure.
++  assert.equal(launcherFailureOf(target, { code: 128, stdout: '', stderr: 'fatal: not a git repository' }), null)
++})
++
++test('a UTF-16 diagnostic is still classified', () => {
++  /* WSL_UTF8 is the fix; this is the belt to its braces, because the launcher's
++     own errors are emitted before the variable is honoured. */
++  const utf16AsUtf8 = 'W\0s\0l\0/\0S\0e\0r\0v\0i\0c\0e\0/\0W\0S\0L\0_\0E\0_\0D\0I\0S\0T\0R\0O\0_\0N\0O\0T\0_\0F\0O\0U\0N\0D\0'
++  assert.equal(normalizeDiagnostic(utf16AsUtf8), 'Wsl/Service/WSL_E_DISTRO_NOT_FOUND')
++  const failure = launcherFailureOf({ distro: 'Ubuntu-24.04' }, { code: -1, stdout: '', stderr: utf16AsUtf8 })
++  assert.equal(failure?.code, 'wsl-distro-missing')
++})
++
++test('git missing inside the distribution is reported as such', () => {
++  const target = { kind: 'wsl', distro: 'Ubuntu-24.04' }
++  const missing = remoteGitMissingOf(target, { code: 127, stdout: '', stderr: 'execvpe(git) failed: No such file or directory' })
++  assert.equal(missing?.code, 'git-missing')
++  assert.match(missing.message, /Ubuntu-24\.04/)
++
++  /* The false-positive guard: git legitimately says "No such file or directory"
++     about a path the user typed, and that must stay git's own answer. */
++  assert.equal(remoteGitMissingOf(target, { code: 128, stdout: '', stderr: "fatal: cannot change to '/gone': No such file or directory" }), null)
++  assert.equal(remoteGitMissingOf(target, { code: 127, stdout: '', stderr: 'something else entirely' }), null)
++  assert.equal(remoteGitMissingOf(target, { code: 0, stdout: 'ok', stderr: '' }), null)
++})

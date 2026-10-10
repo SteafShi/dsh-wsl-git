@@ -1,8 +1,8 @@
-# dsh-ide-git bundle patch.
+# dsh-wsl-git bundle patch.
 #
 # Installed through the official CLI —
 #
-#   dsh plugin --profile <name> add dsh-ide-git
+#   dsh plugin --profile <name> add dsh-wsl-git
 #
 # — the command reconciles dsh.profile.bundles against installed packages and,
 # seeing this declaration, merges THIS patch exactly like the manual mount line
@@ -11,12 +11,18 @@
 # Manual mount equivalent (profile cordis.patch.yml):
 #
 #   - insert:
-#       - id: ide-git
-#         name: 'dsh-ide-git'
+#       - id: wsl-git
+#         name: 'dsh-wsl-git'
 #
-# Only the Node half loads through this row (the /dsh-ide-git/api git routes).
+# Only the Node half loads through this row (the /dsh-wsl-git/api git routes).
 # The web client half is served through exports["./client"] and mounted by the
 # browser boot graph; there it registers one dsh-better-sidebar tab.
+#
+# The row id is 'wsl-git', NOT 'ide-git': the plugin persists its settings card
+# values under the loader row id, so sharing the upstream id would make the two
+# plugins read and write one document. It also means both may be mounted at
+# once without a duplicate-row error — but they must not be, because each
+# registers its own Git tab and the upstream one cannot see a WSL repository.
 - insert:
-    - id: ide-git
-      name: 'dsh-ide-git'
+    - id: wsl-git
+      name: 'dsh-wsl-git'

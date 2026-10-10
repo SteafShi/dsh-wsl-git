@@ -1,14 +1,36 @@
 /**
- * dsh-ide-git — host half (plain JavaScript, no build step).
+ * dsh-wsl-git — host half (plain JavaScript, no build step).
+ *
+ * A fork of dsh-ide-git 0.13.5 (MIT) whose ONE functional difference is the
+ * execution world of `git`: when the session workspace belongs to a WSL
+ * distribution, every git command runs INSIDE that distribution instead of
+ * against the Windows binary. The panel itself — routes, methods, safety
+ * semantics — is unchanged, so a workspace that is not a WSL workspace behaves
+ * exactly as the upstream plugin did.
+ *
+ * Why the fork exists: the upstream host spawns the local `git` with
+ * `node:path`'s Windows semantics, so a WSL workspace path either resolved to
+ * a drive-relative spelling that names nothing, or reached Windows git as a
+ * UNC path it cannot use as a working tree. The panel then reported
+ * "not a git repository" for a repository that exists.
  *
  * One HTTP surface backs the browser panel:
  *
- *   POST /dsh-ide-git/api/<method>   -> { ok: true, data } | { ok: false, error }
+ *   POST /dsh-wsl-git/api/<method>   -> { ok: true, data } | { ok: false, error }
  *
- * Every method is a thin, argv-array wrapper around the local `git` binary
- * (never a shell string), executed with the working directory the client sent
- * (the session scope cwd). Read methods are cheap; write methods are explicit
- * and the destructive ones require an explicit `confirm: true` from the caller.
+ * Every method is a thin, argv-array wrapper around `git` (never a shell
+ * string), executed with the working directory the client sent (the session
+ * scope cwd). Read methods are cheap; write methods are explicit and the
+ * destructive ones require an explicit `confirm: true` from the caller.
+ *
+ * PATH CONTRACT — the load-bearing rule of this fork. Every path that crosses
+ * the HTTP boundary (in either direction) is spelled the way the HOST names it,
+ * which is the same spelling DSH stores as the session workspace: a WSL UNC
+ * path (`\\wsl.localhost\<distro>\<linux>`) for a distribution workspace, or a
+ * Windows drive path for a `/mnt/<drive>` workspace. A Linux path lives only
+ * inside `src/target.js`'s spawn boundary and never reaches the client. That is
+ * what keeps `sameDirectory`, `pathIdentity`, the repo picker and the
+ * client's per-session remembered repo all comparing one identity.
  *
  * Trust fence: the routes are mounted on DSH's own web server, so they are
  * same-origin by construction. A request is served only when the Host header
@@ -20,12 +42,15 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { homedir } from 'node:os'
+import { describeTarget, isLinuxOnlyPath, linuxPathOf, linuxToHost, readWslWorkspaces, resolveTarget } from './target.js'
+import { gitProgramFor, gitSpawnSpec, launcherFailureOf, remoteGitMissingOf } from './wsl-git.js'
 
-export const name = 'dsh-ide-git'
+export const name = 'dsh-wsl-git'
 export const inject = ['webServer']
 
 /* Row Config = the plugin's settings surface on dsh >= 0.1.7: the host persists
-   these values under the loader row id ('ide-git', see cordis.patch.yml) and the
+   these values under the loader row id ('wsl-git', see cordis.patch.yml) and the
    browser reads them through ctx.configForms, so the settings card on the
    plugin's page and the action rail read ONE document. The rail's edit is one
    switch per action (`railRefresh` … `railPush`); a missing field means "default"
@@ -39,7 +64,7 @@ let Schema = null
 try {
   Schema = (await import('@deepseek-ai/schemastery')).default
 } catch (error) {
-  console.warn('[dsh-ide-git] @deepseek-ai/schemastery is not resolvable here; the row Config surface is absent'
+  console.warn('[dsh-wsl-git] @deepseek-ai/schemastery is not resolvable here; the row Config surface is absent'
     + ' (the browser falls back to its localStorage rail config): ' + (error && error.message ? error.message : String(error)))
 }
 
@@ -77,12 +102,22 @@ function railConfigSchema(schema) {
      does not mark volatile ("Config field … is not volatile"), and the settings
      switch then rolls back silently. */
   shape.immersive = live(schema.boolean().default(true))
+  /* WSL execution (this fork's reason to exist). Every one of these is EMPTY by
+     default, and empty means "the workspace decides": a WSL workspace path names
+     its own distribution, so the ordinary install needs no configuration at all
+     and a non-WSL workspace keeps running the local git. `distro` is the last
+     resort for a Windows workspace nothing registered in the WSL registry, and
+     `gitPath` is the git program — a Windows path for a local target, a program
+     name or distribution path for a WSL one. */
+  shape.distro = live(schema.string().default(''))
+  shape.user = live(schema.string().default(''))
+  shape.gitPath = live(schema.string().default(''))
   return schema.object(shape)
 }
 
 export const Config = Schema === null ? undefined : railConfigSchema(Schema)
 
-const ROUTE_PREFIX = '/dsh-ide-git/api'
+const ROUTE_PREFIX = '/dsh-wsl-git/api'
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 
 /* Ring buffer of the most recent git runs — the panel's "Git output" view
@@ -121,23 +156,142 @@ function badRequest(message) {
 
 /* ============================== argv git ============================== */
 
-function gitBinary() {
-  const override = process.env.DSH_IDE_GIT_BIN
-  return override !== undefined && override.trim() !== '' ? override.trim() : 'git'
+/**
+ * The resolved row config, published by `apply()`.
+ *
+ * Module-level because every method is a bare function reached through the
+ * METHODS table (the upstream shape), and mutable state beside `repoScanCache`
+ * and `undoStacks` is already how this plugin is written. Empty until apply
+ * runs, and every WSL field defaults to "the workspace decides", so a call made
+ * before then still resolves the ordinary case correctly.
+ */
+let settings = {}
+
+/** The harness home — the same resolution dsh-wsl-workspace uses for its registry. */
+function dshHome() {
+  const configured = process.env.DSH_HOME
+  return configured !== undefined && configured.trim() !== '' ? configured.trim() : path.join(homedir(), '.dsh')
+}
+
+/**
+ * The execution world for one call, decided from the path the client sent.
+ *
+ * The registry is re-read per call rather than cached: it is a tiny file, and a
+ * `/mnt` workspace added in the settings dialog has to take effect on the next
+ * panel refresh rather than on the next process start.
+ */
+function targetFor(hostPath) {
+  return resolveTarget(hostPath, {
+    store: readWslWorkspaces(dshHome()),
+    distro: settings.distro,
+    user: settings.user,
+  })
 }
 
 /**
  * Run git with an argv array (no shell). Resolves for ANY exit code so callers
  * can decide whether a non-zero status is data (e.g. `git diff --quiet`) or an
  * error; `git()` below is the throwing form.
+ *
+ * The world is decided per call from `cwd` (see the PATH CONTRACT in the module
+ * note): a WSL workspace runs the distribution's own git through `wsl.exe`,
+ * everything else runs the local binary exactly as the upstream plugin did.
+ *
+ * A failure of the LAUNCHER is rejected rather than resolved. It is not git's
+ * answer about the repository, and letting it through as a non-zero exit is how
+ * the upstream plugin ended up telling WSL users their repository does not
+ * exist: `repoRootOf` reads any non-zero `rev-parse` as `not-a-repo`.
  */
 function runGit(cwd, args, options = {}) {
+  return runGitTarget(targetFor(cwd), args, options)
+}
+
+/**
+ * The HOST spelling of an absolute path git reported.
+ *
+ * Applied ONLY to the fields that are defined to be an absolute path:
+ * `rev-parse --show-toplevel`, `rev-parse --absolute-git-dir`, and
+ * `worktree list`'s `worktree ` line. Rewriting a whole stream instead would
+ * corrupt file content — a diff body may legitimately contain an absolute Linux
+ * path, and it is not this plugin's to translate.
+ *
+ * An unmappable path throws rather than falling through as a Linux spelling: a
+ * Linux path that reached the HTTP boundary would be resolved by the host as
+ * root-relative (`/home/x` → `C:\home\x`) and silently name nothing.
+ *
+ * @param {{kind: string, distro?: string}} target - the target the call ran in.
+ * @param {string} reported - the absolute path git printed.
+ * @returns {string} the path in host spelling.
+ */
+function hostPathOf(target, reported) {
+  if (target.kind !== 'wsl') return reported
+  const mapped = linuxToHost(reported, target.distro)
+  if (mapped === null) {
+    throw new PanelError(
+      'wsl-path-unmappable',
+      `git reported "${reported}", which has no host spelling inside WSL distribution "${target.distro}"`,
+      502,
+    )
+  }
+  return mapped
+}
+
+/**
+ * {@link linuxPathOf} with the refusal made loud, for the two callers that pass an
+ * absolute path as a git ARGUMENT (`clone`'s directory, `diff --no-index`'s file).
+ *
+ * The mapping itself is pure and lives in src/target.js beside its inverse, where
+ * the unit suite can drive it without a WSL host. Returning null there and
+ * throwing here keeps that module free of this one's error type.
+ *
+ * @param {{kind: string, distro?: string, hostPath: string, linuxPath?: string}} target
+ * @param {string} hostPath - an absolute host path.
+ * @returns {string} the same path in the target's own spelling.
+ */
+function linuxSpellingOf(target, hostPath) {
+  const spelled = linuxPathOf(target, hostPath)
+  if (spelled === null) {
+    throw new PanelError(
+      'wsl-path-unmappable',
+      `"${hostPath}" has no Linux spelling for WSL distribution "${target.distro}"`,
+      502,
+    )
+  }
+  return spelled
+}
+
+/**
+ * How one run is labelled in the panel's "Git output" view (upstream 0.15.0's
+ * ring buffer).
+ *
+ * The world is named because the same git arguments now mean different programs:
+ * without it a reader cannot tell whether `status` ran inside the distribution or
+ * against the Windows binary, which is the first question a bug report asks.
+ *
+ * @param {{kind: string, distro?: string}} target - the target the call ran in.
+ * @param {string[]} args - the git arguments.
+ * @returns {string} the label.
+ */
+function logArgvOf(target, args) {
+  const text = args.join(' ')
+  return target.kind === 'wsl' ? `[${target.distro}] ${text}` : text
+}
+
+function runGitTarget(target, args, options = {}) {
   const timeoutMs = options.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : options.timeoutMs
   const startedAt = Date.now()
+  const spec = gitSpawnSpec(target, args, gitProgramFor(target, settings.gitPath))
+
+  /** The infrastructure failure this result represents, or null when it is git's own answer. */
+  const infrastructureFailureOf = (result) => {
+    if (target.kind !== 'wsl') return null
+    return launcherFailureOf(target, result) ?? remoteGitMissingOf(target, result)
+  }
+
   return new Promise((resolve, reject) => {
     let child
     try {
-      child = spawn(gitBinary(), args, { cwd, windowsHide: true, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' } })
+      child = spawn(spec.argv[0], spec.argv.slice(1), spec.options)
     } catch (error) {
       reject(new PanelError('git-missing', 'cannot start git: ' + messageOf(error), 500))
       return
@@ -172,21 +326,27 @@ function runGit(cwd, args, options = {}) {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      pushGitLog({
-        at: new Date(startedAt).toISOString(),
-        argv: args.join(' '),
-        code: code === null ? -1 : code,
-        ms: Date.now() - startedAt,
-        out: clipGitLogText(Buffer.concat(out).toString('utf8')),
-        err: clipGitLogText(Buffer.concat(err).toString('utf8')),
-      })
-      resolve({
+      const result = {
         code: code === null ? -1 : code,
         signal: signal === null ? undefined : signal,
         stdout: Buffer.concat(out).toString('utf8'),
         stderr: Buffer.concat(err).toString('utf8'),
         truncated: outBytes > MAX_OUTPUT_BYTES,
+      }
+      pushGitLog({
+        at: new Date(startedAt).toISOString(),
+        argv: logArgvOf(target, args),
+        code: result.code,
+        ms: Date.now() - startedAt,
+        out: clipGitLogText(result.stdout),
+        err: clipGitLogText(result.stderr),
       })
+      const failure = infrastructureFailureOf(result)
+      if (failure !== null) {
+        reject(new PanelError(failure.code, failure.message, failure.code === 'git-missing' ? 500 : 502))
+        return
+      }
+      resolve(result)
     })
   })
 }
@@ -209,6 +369,16 @@ function messageOf(error) {
 function requireAbsolute(value, label) {
   if (typeof value !== 'string' || value.trim() === '') throw badRequest(label + ' is required')
   if (!path.isAbsolute(value)) throw badRequest(label + ' must be an absolute path')
+  /* A Linux absolute path is "absolute" to node:path on Windows too, and that is
+     the trap this refuses: path.resolve('/home/steaf/x') yields 'C:\home\steaf\x',
+     which names nothing, so every later filesystem call would quietly miss. The
+     boundary speaks host spellings only (see the module's PATH CONTRACT), so a
+     Linux path is rejected by name rather than mangled. `//`-prefixed input is
+     left alone — that is the forward-slash spelling of a UNC path, which the
+     client legitimately sends back. */
+  if (isLinuxOnlyPath(value)) {
+    throw badRequest(label + ' must be a host path (a UNC path or a drive path), not a Linux path: ' + value)
+  }
   return path.resolve(value)
 }
 
@@ -240,14 +410,18 @@ function cwdOf(payload) {
 
 async function repoRootOf(cwd, payload) {
   if (payload !== undefined && payload.repoRoot !== undefined) return requireAbsolute(payload.repoRoot, 'repoRoot')
-  const result = await runGit(cwd, ['rev-parse', '--show-toplevel'])
+  const target = targetFor(cwd)
+  const result = await runGitTarget(target, ['rev-parse', '--show-toplevel'])
   if (result.code !== 0) {
     // A workspace that is not a repository is a normal state, not a failure:
     // the client answers it with a repo picker instead of an error banner.
+    // (A launch failure never reaches here — runGitTarget rejects it, so this
+    // branch means git really did answer "not a repository".)
     throw new PanelError('not-a-repo', 'not a git repository: ' + cwd, 409)
   }
   const top = result.stdout.trim()
-  return top === '' ? cwd : top
+  // git answers in the world it ran in; the boundary speaks host spellings.
+  return top === '' ? cwd : hostPathOf(target, top)
 }
 
 async function currentBranchOf(root) {
@@ -419,14 +593,17 @@ function sameDirectory(left, right) {
 }
 
 async function worktreesOf(root) {
-  const result = await runGit(root, ['worktree', 'list', '--porcelain'])
+  const target = targetFor(root)
+  const result = await runGitTarget(target, ['worktree', 'list', '--porcelain'])
   if (result.code !== 0) return []
   const trees = []
   let current = null
   for (const line of result.stdout.split('\n')) {
     if (line.startsWith('worktree ')) {
       if (current !== null) trees.push(current)
-      current = { path: line.slice('worktree '.length), branch: null, head: null, detached: false, bare: false }
+      // `worktree list` prints absolute paths, in the world git ran in; the
+      // client compares these against host paths (`sameDirectory`).
+      current = { path: hostPathOf(target, line.slice('worktree '.length)), branch: null, head: null, detached: false, bare: false }
       continue
     }
     if (current === null) continue
@@ -576,10 +753,17 @@ function snapshotState(root, files) {
 
 /** .git markers that mean a multi-step operation is still in progress. */
 async function operationOf(root) {
-  const result = await runGit(root, ['rev-parse', '--absolute-git-dir'])
+  const target = targetFor(root)
+  const result = await runGitTarget(target, ['rev-parse', '--absolute-git-dir'])
   if (result.code !== 0) return null
-  const gitDir = result.stdout.trim()
-  if (gitDir === '') return null
+  const reported = result.stdout.trim()
+  if (reported === '') return null
+  /* The markers are read from the host, so the git directory has to be named the
+     host's way first. Inside WSL that means the 9P share for an ext4 repository
+     or the drive itself for a `/mnt` one — the mapping in `hostPathOf` picks the
+     readable spelling. Without it every lookup answered false and a merge or a
+     rebase in progress went unreported. */
+  const gitDir = hostPathOf(target, reported)
   const markers = [
     ['merge', 'MERGE_HEAD'],
     ['rebase', 'rebase-merge'],
@@ -800,7 +984,14 @@ async function diff(payload) {
     /* --no-index reads the file for real, so unlike the plain `git diff --`
        form an absolute path must NOT be allowed to escape the repository. */
     if (absolute !== root && !absolute.startsWith(root + path.sep)) throw badRequest('path must stay inside the repository')
-    const result = await runGit(root, ['diff', '--no-color', '--no-ext-diff', '-U3', '--no-index', '--', '/dev/null', absolute])
+    /* The file travels as a git ARGUMENT and the header rewrite below matches it
+       LITERALLY, so both halves have to use one spelling — the world's. Handing
+       Linux git the host spelling of a path inside its own filesystem names
+       nothing, and then the rewrite would not match either, leaving the preview
+       with an absolute path in its header. */
+    const diffTarget = targetFor(root)
+    const spelled = linuxSpellingOf(diffTarget, absolute)
+    const result = await runGitTarget(diffTarget, ['diff', '--no-color', '--no-ext-diff', '-U3', '--no-index', '--', '/dev/null', spelled])
     if (result.code !== 0 && result.code !== 1) {
       const detail = result.stderr.trim() === '' ? result.stdout.trim() : result.stderr.trim()
       throw new PanelError('git-failed', 'git diff --no-index failed: ' + (detail === '' ? 'exit ' + result.code : detail), 409)
@@ -809,12 +1000,12 @@ async function diff(payload) {
        the header lines back to the repository-relative spelling so the preview
        reads like every other patch (body lines are left untouched). */
     let out = result.stdout
-    if (out.indexOf(absolute) >= 0 && out.indexOf('\n') !== -1) {
+    if (out.indexOf(spelled) >= 0 && out.indexOf('\n') !== -1) {
       out = out.split('\n').map((line) => {
-        if (line.startsWith('diff --git ') && line.indexOf(absolute) >= 0) return 'diff --git a/' + rel + ' b/' + rel
+        if (line.startsWith('diff --git ') && line.indexOf(spelled) >= 0) return 'diff --git a/' + rel + ' b/' + rel
         /* the b/ side of --no-index carries the absolute path verbatim (its
-           leading slash merged into the separator): match '+++ b' + absolute. */
-        if (line.startsWith('+++ b' + absolute)) return '+++ b/' + rel
+           leading slash merged into the separator): match '+++ b' + spelled. */
+        if (line.startsWith('+++ b' + spelled)) return '+++ b/' + rel
         return line
       }).join('\n')
     }
@@ -1132,7 +1323,11 @@ function requireUrl(value, label) {
 async function clone(payload) {
   const url = requireUrl(payload.url, 'url')
   const dir = requireAbsolute(payload.dir, 'dir')
-  await git(path.dirname(dir), ['clone', url, dir], { timeoutMs: CLONE_TIMEOUT_MS })
+  /* The target directory travels as a git ARGUMENT, so it must be spelled the way
+     the world that runs git spells it. The answer still echoes the HOST spelling
+     the caller asked for: this is an argument site, not an output site. */
+  const parent = path.dirname(dir)
+  await git(parent, ['clone', url, linuxSpellingOf(targetFor(parent), dir)], { timeoutMs: CLONE_TIMEOUT_MS })
   return { dir }
 }
 
@@ -1170,7 +1365,7 @@ async function undoApply(payload) {
     if (exists.code === 0) throw new PanelError('undo-conflict', 'branch "' + entry.name + '" already exists again', 409)
     await git(root, ['branch', entry.name, entry.hash])
   } else if (entry.kind === 'stash-drop') {
-    await git(root, ['stash', 'store', '-m', 'dsh-ide-git: restored ' + entry.label, entry.hash])
+    await git(root, ['stash', 'store', '-m', 'dsh-wsl-git: restored ' + entry.label, entry.hash])
   } else if (entry.kind === 'discard') {
     // Refuse to trample anything typed since the discard: every target must
     // still look exactly the way the discard left it.
@@ -1189,6 +1384,24 @@ async function undoApply(payload) {
       }
       mkdirSync(path.dirname(target), { recursive: true })
       writeFileSync(target, file.data)
+    }
+    /* Read back what was written, because inside WSL these bytes reach the
+       repository through the 9P share and a write that did not land must not be
+       reported as a restore. The snapshot is the user's ONLY copy of the
+       discarded content, so a silent miss here is unrecoverable data loss rather
+       than a cosmetic failure. The undo entry is deliberately still on the stack
+       when this throws — the caller can fix the cause and retry instead of
+       losing the bytes to a consumed handle. */
+    const expectedAfter = entry.files.map((file) => ({ rel: file.rel, hash: file.data === null ? null : hashOf(file.data) }))
+    const actualAfter = snapshotState(root, entry.files)
+    for (let position = 0; position < actualAfter.length; position += 1) {
+      if (actualAfter[position].hash !== expectedAfter[position].hash) {
+        throw new PanelError(
+          'undo-not-restored',
+          'the discarded content of "' + entry.files[position].rel + '" did not reach the repository; nothing else was undone',
+          500,
+        )
+      }
     }
   } else {
     throw new PanelError('undo-unsupported', 'this action cannot be undone', 500)
@@ -1307,12 +1520,16 @@ async function collectSubmoduleRepos(root) {
     if (!existsSync(path.join(absolute, '.git'))) continue
     candidates.push({ absolute, rel })
   }
-  const tops = await Promise.all(candidates.map((entry) => runGit(entry.absolute, ['rev-parse', '--show-toplevel'])))
+  const tops = await Promise.all(candidates.map((entry) => {
+    const target = targetFor(entry.absolute)
+    return runGitTarget(target, ['rev-parse', '--show-toplevel']).then((result) => ({ target, result }))
+  }))
   for (let index = 0; index < candidates.length; index += 1) {
-    const top = tops[index]
-    if (top.code !== 0) continue
-    const reported = top.stdout.trim().replace(/\\/g, '/').replace(/\/+$/, '')
-    found.push({ root: reported === '' ? candidates[index].absolute : reported, rel: candidates[index].rel })
+    const { target, result } = tops[index]
+    if (result.code !== 0) continue
+    const reported = result.stdout.trim()
+    const rooted = reported === '' ? candidates[index].absolute : hostPathOf(target, reported)
+    found.push({ root: rooted.replace(/\\/g, '/').replace(/\/+$/, ''), rel: candidates[index].rel })
   }
   return found
 }
@@ -1342,11 +1559,18 @@ async function scanRepos(cwd) {
     return { cached: true, rows: cached.rows.map((row) => ({ ...row })) }
   }
   const list = []
-  const self = await runGit(cwd, ['rev-parse', '--show-toplevel'])
+  const target = targetFor(cwd)
+  const self = await runGitTarget(target, ['rev-parse', '--show-toplevel'])
   const isRepo = self.code === 0
   if (isRepo) {
     const top = self.stdout.trim()
-    list.push(repoRow(top === '' ? cwd : top, undefined, 'workspace'))
+    /* git answers in the world it ran in, and this row's `path` becomes the
+       `repoRoot` every later request carries. Left as the raw Linux path it would
+       resolve as neither a UNC path nor a registered drive workspace, fall back to
+       the LOCAL git, and then be handed to spawn as a cwd node reads as
+       `C:\home\...` — measured: `repos` failed with `cannot run git: spawn git
+       ENOENT` while every method that already passed through `hostPathOf` worked. */
+    list.push(repoRow(top === '' ? cwd : hostPathOf(target, top), undefined, 'workspace'))
   }
   for (const dir of findNestedRepos(cwd, 2)) list.push(repoRow(dir, undefined, 'nested'))
   /* Submodules of EVERY discovered checkout, not only a workspace that is one:
@@ -1417,11 +1641,28 @@ async function repos(payload) {
   return { cwd, isRepo: rows.some((row) => row.kind === 'workspace'), repos: rows, ...(cached ? { cached: true } : {}) }
 }
 
-async function version() {
-  const result = await runGit(process.cwd(), ['--version'])
+/**
+ * The git this panel will actually run.
+ *
+ * The payload may carry a `cwd`. With one, the answer describes the git of THAT
+ * workspace's world — which is the only version that explains what the panel
+ * does, and the reason this method is target-aware at all. Without one (the
+ * upstream call shape, used by probes) it stays the local binary.
+ */
+async function version(payload) {
+  const cwd = payload !== undefined && typeof payload.cwd === 'string' && payload.cwd.trim() !== ''
+    ? requireAbsolute(payload.cwd, 'cwd')
+    : process.cwd()
+  const target = targetFor(cwd)
+  const result = await runGitTarget(target, ['--version'])
   const raw = result.code === 0 ? result.stdout.trim() : ''
   const match = /git version (\S+)/.exec(raw)
-  return { git: match === null ? raw : match[1], available: result.code === 0 }
+  return {
+    git: match === null ? raw : match[1],
+    available: result.code === 0,
+    world: target.kind,
+    target: describeTarget(target),
+  }
 }
 
 function optionalPaths(payload, label) {
@@ -1877,10 +2118,28 @@ async function handle(req, res) {
   }
 }
 
-export function apply(ctx) {
+/**
+ * Mount the plugin.
+ *
+ * `config` is the row's resolved settings, whose WSL fields are all EMPTY by
+ * default and empty means "the workspace decides" — so publishing it verbatim is
+ * both the configured behaviour and the unconfigured one.
+ *
+ * @param {*} ctx - the host context (needs `webServer`).
+ * @param {{distro?: string, user?: string, gitPath?: string}} [config] - the row config.
+ */
+export function apply(ctx, config) {
+  const resolved = config === undefined || config === null ? {} : config
+  settings = {
+    distro: typeof resolved.distro === 'string' ? resolved.distro : '',
+    user: typeof resolved.user === 'string' ? resolved.user : '',
+    gitPath: typeof resolved.gitPath === 'string' ? resolved.gitPath : '',
+  }
+  ctx.effect(() => () => { settings = {} }, 'dsh-wsl-git: WSL execution settings')
+
   ctx.effect(
     () => ctx.webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler: handle }),
-    'dsh-ide-git: /dsh-ide-git/api git routes',
+    'dsh-wsl-git: /dsh-wsl-git/api git routes',
   )
   /* AI commit message (issue #6). `llm` and `sessions` are injected HERE and not
      in `export const inject`: a host without them must still load the whole
@@ -1893,6 +2152,6 @@ export function apply(ctx) {
     injected.effect(() => {
       commitServices = { llm: llm, sessions: sessions }
       return () => { commitServices = null }
-    }, 'dsh-ide-git: ai commit message')
+    }, 'dsh-wsl-git: ai commit message')
   })
 }

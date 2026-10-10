@@ -1,5 +1,13 @@
 /**
- * dsh-ide-git — client half (plain JavaScript, no build step).
+ * dsh-wsl-git — client half (plain JavaScript, no build step).
+ *
+ * A fork of dsh-ide-git 0.13.5 (MIT). The panel is unchanged; what differs is
+ * that `git` may run inside a WSL distribution (see src/index.js's PATH
+ * CONTRACT). The client never learns which world it is talking to: every path
+ * it receives is a host spelling, and the only places that spelling was
+ * mishandled are `baseName`/`dirName` (which split on '/' only, so a UNC repo
+ * root came back whole) and the path LABELS, which show the Linux spelling a
+ * person actually thinks in via `displayPath`.
  *
  * Registers ONE dsh-better-sidebar tab: an IDE-style Git tool window.
  *
@@ -17,7 +25,7 @@
  * exactly like better-sidebar's own panels do.
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-ide-git',
+  id: 'dsh-wsl-git',
   factory: (require) => {
     const React = require('react')
     const E = React.createElement
@@ -51,18 +59,18 @@ window.__ModuleLoader__.load({
        shell with <base href="./">, so document.baseURI is the mount the page
        was loaded from — the origin root, or a prefix-stripping proxy's sub-path
        (issue #4). fetch() resolves this relative path against the document
-       base, so the panel's calls land on /dsh-ide-git/api at the origin root
-       and on <mount>/dsh-ide-git/api under a sub-path, both matching the route
+       base, so the panel's calls land on /dsh-wsl-git/api at the origin root
+       and on <mount>/dsh-wsl-git/api under a sub-path, both matching the route
        the host half registered at its upstream path. An origin-absolute base
        would escape the mount and 404 behind any strict proxy. */
-    const API_BASE = 'dsh-ide-git/api'
-    const TAB_ID = 'dsh-ide-git:panel'
+    const API_BASE = 'dsh-wsl-git/api'
+    const TAB_ID = 'dsh-wsl-git:panel'
     /* The bundle's package name: the key the Plugins page uses for a bundle's own
        page and its `plugins.bundle.config` slot. */
-    const SETTINGS_BUNDLE = 'dsh-ide-git'
+    const SETTINGS_BUNDLE = 'dsh-wsl-git'
     /* The namespace this plugin's dictionaries are published under in the DSH
        locale registry. */
-    const LOCALE_NS = 'dsh-ide-git'
+    const LOCALE_NS = 'dsh-wsl-git'
     const LANE_WIDTH = 14
     /* Hard cap on the drawn lane columns. Lanes beyond the cap collapse into
        the last column: without the cap a branchy repository pushed the graph
@@ -70,7 +78,7 @@ window.__ModuleLoader__.load({
     const GRAPH_MAX_LANES = 7
     const LANE_COLORS = ['#4d6bfe', '#e2a03f', '#3fb950', '#d2679b', '#59b0d6', '#b083f0', '#d2694a', '#8a9aa8']
     const AUTO_REFRESH_MS = 12000
-    const REPO_KEY = 'dsh-ide-git.repo.v1'
+    const REPO_KEY = 'dsh-wsl-git.repo.v1'
     const COMPACT_MAX_WIDTH = 400
     /* Branch rows sit one step right of their SECTION header, and each namespace
        folder adds another step. Without the base step the rows started at 8px —
@@ -5338,7 +5346,7 @@ window.__ModuleLoader__.load({
        mode, quota errors and corrupted payloads degrade to "no seed", never to
        an error — and never to a rollback of live state (seeding still only
        fills cold state, see the panel side below). */
-    const PAINT_KEY = 'dsh-ide-git.paint.v1'
+    const PAINT_KEY = 'dsh-wsl-git.paint.v1'
     let paintHydrated = false
 
     function hydratePaint() {
@@ -5437,7 +5445,7 @@ window.__ModuleLoader__.load({
        snapped back to defaults and folders re-folded. One localStorage home,
        GLOBAL by design: which sections you keep folded is a habit, not a
        property of the repository. ---- */
-    const TREE_KEY = 'dsh-ide-git.tree.v1'
+    const TREE_KEY = 'dsh-wsl-git.tree.v1'
 
     function readTreeState() {
       try {
@@ -5528,7 +5536,7 @@ window.__ModuleLoader__.load({
       } catch (error) { void error }
     }
 
-    const FAV_KEY = 'dsh-ide-git.favorites.v1'
+    const FAV_KEY = 'dsh-wsl-git.favorites.v1'
 
     function readFavorites(repoPath) {
       try {
@@ -5555,7 +5563,7 @@ window.__ModuleLoader__.load({
       return next
     }
 
-    const RAIL_KEY = 'dsh-ide-git.rail.v1'
+    const RAIL_KEY = 'dsh-wsl-git.rail.v1'
 
     /* The action rail is user-composed. RAIL_SPECS is the canonical set AND the
        default order; a stored config only holds a permutation plus the ids the
@@ -5624,7 +5632,7 @@ window.__ModuleLoader__.load({
     /* One write window for the settings card: a burst of switches becomes one
        atomic mutation instead of a stream the Host can lose. */
     const FLUSH_MS = 250
-    const RAIL_MIGRATED_KEY = 'dsh-ide-git.rail.v1.migrated'
+    const RAIL_MIGRATED_KEY = 'dsh-wsl-git.rail.v1.migrated'
     let railForm = null
     let railMigrating = false
     const railWatchers = new Set()
@@ -5728,8 +5736,8 @@ window.__ModuleLoader__.load({
           const written = active.set(field, visible)
           if (written !== undefined && written !== null && typeof written.then === 'function') {
             void written.then((accepted) => {
-              if (accepted === false) console.warn('[dsh-ide-git] rail setting "' + field + '" was refused by the host')
-            }, (error) => { console.warn('[dsh-ide-git] rail setting write failed: ' + String(error && error.message ? error.message : error)) })
+              if (accepted === false) console.warn('[dsh-wsl-git] rail setting "' + field + '" was refused by the host')
+            }, (error) => { console.warn('[dsh-wsl-git] rail setting write failed: ' + String(error && error.message ? error.message : error)) })
           }
         }
         return
@@ -5761,7 +5769,7 @@ window.__ModuleLoader__.load({
         const settled = Promise.resolve(active.mutate(ops)).then(
           (accepted) => accepted !== false,
           (error) => {
-            console.warn('[dsh-ide-git] rail setting write failed: ' + String(error && error.message ? error.message : error))
+            console.warn('[dsh-wsl-git] rail setting write failed: ' + String(error && error.message ? error.message : error))
             return false
           },
         )
@@ -5826,14 +5834,14 @@ window.__ModuleLoader__.load({
         const outcome = writeRailFields(ops, form)
         if (outcome.sent !== true) {
           railMigrating = false
-          console.warn('[dsh-ide-git] legacy rail migration was refused (' + String(outcome.reason) + '); it stays unmarked and is retried')
+          console.warn('[dsh-wsl-git] legacy rail migration was refused (' + String(outcome.reason) + '); it stays unmarked and is retried')
           return
         }
         if (outcome.settled === undefined) { done(); return }
         void outcome.settled.then((acceptedWrite) => {
           if (acceptedWrite === true) { done(); return }
           railMigrating = false
-          console.warn('[dsh-ide-git] legacy rail migration was not accepted; it stays unmarked and is retried')
+          console.warn('[dsh-wsl-git] legacy rail migration was not accepted; it stays unmarked and is retried')
         })
       } catch (error) { void error }
     }
@@ -5861,7 +5869,7 @@ window.__ModuleLoader__.load({
        panel in the other. The bucket is therefore `chrome:wide|tall`, and what
        is stored is a RATIO of the measured container: resizing the dock or the
        window rescales the panes instead of breaking the layout. */
-    const PANES_KEY = 'dsh-ide-git.panes.v1'
+    const PANES_KEY = 'dsh-wsl-git.panes.v1'
     /* Every chrome can now move all three panes (the detail diff window used to
        be a fixed max-height:55% in the columns chrome — user report: it could
        not be resized). The DIFF pane is special: it is carved out of the middle
@@ -6160,16 +6168,58 @@ window.__ModuleLoader__.load({
       return at.getFullYear() + '/' + pad(at.getMonth() + 1) + '/' + pad(at.getDate()) + ' ' + pad(at.getHours()) + ':' + pad(at.getMinutes())
     }
 
+    /* A path reaching these helpers is either a repo-relative git path or a HOST
+       path — and a host path may be a WSL UNC path, spelled with backslashes (or
+       as `//wsl.localhost/…` once the host's `repoRow` slash-normalized it).
+       Splitting on '/' alone therefore handed back a WHOLE UNC path as a single
+       label, so a WSL workspace's repository was named
+       `\\wsl.localhost\Ubuntu-24.04\home\steaf\workspace\device_xcar_1.0`
+       instead of `device_xcar_1.0`. Normalizing the separators first cannot hurt
+       a relative git path, which never contains a backslash: git prints status,
+       numstat and log paths with '/' on every platform. */
     function baseName(filePath) {
       if (typeof filePath !== 'string') return ''
-      const parts = filePath.split('/')
+      const parts = filePath.replace(/\\/g, '/').split('/')
       return parts[parts.length - 1]
     }
 
     function dirName(filePath) {
       if (typeof filePath !== 'string') return ''
-      const index = filePath.lastIndexOf('/')
+      /* The index is found on the normalized copy but the ORIGINAL is sliced:
+         `\` → `/` is one character for one character, so indices stay aligned. */
+      const index = filePath.replace(/\\/g, '/').lastIndexOf('/')
       return index < 0 ? '' : filePath.slice(0, index)
+    }
+
+    /* ---- path labels for a WSL workspace ---- */
+    /* The path a PERSON thinks in. A WSL workspace path is a UNC share, and
+       printing `\\wsl.localhost\Ubuntu-24.04\home\steaf\workspace\x` where the
+       user is looking at `/home/steaf/workspace/x` is noise that also hides which
+       distribution the panel is talking to. These helpers are for LABELS only:
+       every request still carries the raw host path, which is the wire contract
+       the host's `requireAbsolute` enforces. */
+
+    /** The distribution a WSL UNC path names, or '' for anything else. */
+    function distroOf(hostPath) {
+      if (typeof hostPath !== 'string') return ''
+      const match = /^\/\/wsl(?:\.localhost|\$)\/([^/]+)/.exec(hostPath.replace(/\\/g, '/'))
+      return match === null || match[1] === undefined ? '' : match[1]
+    }
+
+    /** The Linux spelling of a WSL UNC path, or the path unchanged. */
+    function displayPath(hostPath) {
+      if (typeof hostPath !== 'string' || hostPath === '') return ''
+      const match = /^\/\/wsl(?:\.localhost|\$)\/[^/]+(\/.*)?$/.exec(hostPath.replace(/\\/g, '/'))
+      if (match === null) return hostPath
+      const rest = match[1] === undefined ? '' : match[1]
+      return rest === '' ? '/' : rest
+    }
+
+    /** `Ubuntu-24.04 · /home/steaf/workspace/x`, or the path alone when not WSL. */
+    function workspaceLocation(hostPath) {
+      const distro = distroOf(hostPath)
+      const shown = displayPath(hostPath)
+      return distro === '' ? shown : distro + ' · ' + shown
     }
 
     /* ============================== commit graph ============================== */
@@ -8170,7 +8220,10 @@ window.__ModuleLoader__.load({
       const repos = props.repos
       return E('div', { className: 'dig-picker' },
         E('div', { className: 'dig-picker-title' }, repos.length === 0 ? t('repo.empty') : t('repo.pick')),
-        E('div', { className: 'dig-picker-sub' }, props.cwd),
+        /* Named with its distribution: with more than one installed, the Linux
+           path alone cannot say which git answered. `title` keeps the raw host
+           path, which is what a request would carry. */
+        E('div', { className: 'dig-picker-sub', title: props.cwd }, workspaceLocation(props.cwd)),
         repos.map((repo) => E('button', {
           key: repo.path,
           type: 'button',
@@ -8181,7 +8234,7 @@ window.__ModuleLoader__.load({
           E('span', { className: 'dig-picker-name' }, repo.name),
           repo.branch === null || repo.branch === undefined ? null : E('span', { className: 'dig-badge' }, repo.branch),
           E('span', { className: 'dig-picker-kind' }, repo.kind === 'workspace' ? t('repo.workspace') : t('repo.nested')),
-          E('span', { className: 'dig-picker-path' }, repo.path))))
+          E('span', { className: 'dig-picker-path', title: repo.path }, displayPath(repo.path)))))
     }
 
     /* ============================== branch tree ============================== */
@@ -11017,7 +11070,7 @@ window.__ModuleLoader__.load({
        package name is the natural value, and it is also the seat key the body
        registers under), the tab kind (unique across kinds — the shipped `git`
        kind is not ours to take), and the guide capsule that opens the tab. */
-    const NATIVE_ID = 'dsh-ide-git'
+    const NATIVE_ID = 'dsh-wsl-git'
     const NATIVE_KIND = 'ide-git'
     const NATIVE_WORKSPACE_ITEMS = (state) => state.items
     /* The conversation.view slot id (issue #8). Order 30 sits the tab after
@@ -11409,10 +11462,10 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       const style = document.createElement('style')
-      style.setAttribute('data-dsh-ide-git', '')
+      style.setAttribute('data-dsh-wsl-git', '')
       style.textContent = CSS
       document.head.appendChild(style)
-      ctx.effect(() => () => { style.remove() }, 'dsh-ide-git: panel styles')
+      ctx.effect(() => () => { style.remove() }, 'dsh-wsl-git: panel styles')
 
       const t = translatorOf(ctx)
 
@@ -11424,7 +11477,7 @@ window.__ModuleLoader__.load({
       if (localeService !== undefined && typeof localeService.register === 'function') {
         ctx.effect(
           () => localeService.register(LOCALE_NS, Object.assign({ zh: ZH, en: EN }, LOCALES)),
-          'dsh-ide-git: locale dictionaries',
+          'dsh-wsl-git: locale dictionaries',
         )
       }
 
@@ -11491,7 +11544,7 @@ window.__ModuleLoader__.load({
               try { offBody() } catch (error) { void error }
               try { offType() } catch (error) { void error }
             }
-          }, 'dsh-ide-git: native right-sidebar seats')
+          }, 'dsh-wsl-git: native right-sidebar seats')
         })
       }
 
@@ -11540,7 +11593,7 @@ window.__ModuleLoader__.load({
             hostedByBetterSidebar = false
             hostNatively()
           }
-        }, 'dsh-ide-git: Git tab')
+        }, 'dsh-wsl-git: Git tab')
       })
 
       /* ctx.inject runs its callback straight away when the service is already
@@ -11582,7 +11635,7 @@ window.__ModuleLoader__.load({
                    priority): better one missed re-registration — the next
                    config change or reload retries — than a sync that throws
                    inside every rail-config notification. */
-                console.warn('[dsh-ide-git] conversation seat registration failed: ' + String(error && error.message ? error.message : error))
+                console.warn('[dsh-wsl-git] conversation seat registration failed: ' + String(error && error.message ? error.message : error))
               }
             } else if (enabled !== true && offView !== null) {
               try { offView() } catch (error) { void error }
@@ -11598,7 +11651,7 @@ window.__ModuleLoader__.load({
               offView = null
             }
           }
-        }, 'dsh-ide-git: conversation view tab')
+        }, 'dsh-wsl-git: conversation view tab')
       })
 
       /* ---- settings: the row Config is the rail's source of truth ---- */
@@ -11627,7 +11680,7 @@ window.__ModuleLoader__.load({
             if (typeof unsubscribe === 'function') unsubscribe()
             notifyRailConfig()
           }
-        }, 'dsh-ide-git: row config')
+        }, 'dsh-wsl-git: row config')
       })
 
       /* The settings card, on the plugin detail page (plugins.bundle.config,
@@ -11646,10 +11699,10 @@ window.__ModuleLoader__.load({
           return () => {
             try { offBundle() } catch (error) { void error }
           }
-        }, 'dsh-ide-git: settings card')
+        }, 'dsh-wsl-git: settings card')
       })
     }
 
-    return { name: 'dsh-ide-git', inject: [], apply }
+    return { name: 'dsh-wsl-git', inject: [], apply }
   },
 })

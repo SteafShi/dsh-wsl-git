@@ -1,0 +1,65 @@
+================================================================================
+dsh-wsl-git — a modified copy of dsh-ide-git
+================================================================================
+
+This software is a modified version of dsh-ide-git 0.15.0.
+
+  Upstream   dsh-ide-git
+  Copyright  Copyright (c) 2026 KannaKuron
+  License    MIT
+  Source     https://github.com/KannaKuron/dsh-ide-git
+  Baseline   https://registry.npmjs.org/dsh-ide-git/-/dsh-ide-git-0.15.0.tgz
+
+  Fork       dsh-wsl-git
+  Copyright  Copyright (c) 2026 SteafShi
+  Source     https://github.com/SteafShi/dsh-wsl-git
+  Patch      patch/dsh-wsl-git-0.15.0-wsl.on-dsh-ide-git-0.15.0.patch
+
+The upstream copyright notice and the MIT permission notice are retained
+verbatim in LICENSE, as that license requires. Every copy or substantial
+portion of this software must include both LICENSE and this NOTICE.
+
+Modifications relative to the baseline
+--------------------------------------------------------------------------------
+
+The full, file-level list is in CHANGELOG.md; the design rationale and the
+measurements behind it are in FORK.md. In summary:
+
+  * git executes inside the WSL distribution the session workspace belongs
+    to, chosen from the workspace path itself (a WSL UNC path names its own
+    distribution) rather than from any configuration.
+  * New pure modules: src/target.js (distribution resolution and bidirectional
+    path translation) and src/wsl-git.js (the wsl.exe argv, the spawn spec and
+    failure classification). No baseline module was replaced.
+  * The host half maps the absolute paths git reports back into the host
+    spelling at the five sites where git defines such a field, and refuses a
+    Linux path at the HTTP boundary instead of resolving it to a drive-relative
+    path that names nothing.
+  * Launcher-level failures are classified and named rather than being served
+    as "not a git repository".
+  * Identifiers were renamed so both plugins can coexist in one profile without
+    sharing a route, a tab id, a locale namespace, a settings row or a
+    localStorage prefix (41 occurrences across the two halves).
+
+UNCHANGED from the baseline
+--------------------------------------------------------------------------------
+
+  * The panel's user interface: layout algorithm, commit graph, branch tree,
+    change list, diff viewer, context menus, "send to chat" wiring.
+  * All 21 locale dictionaries.
+  * The AI commit-message feature.
+  * The safety semantics: confirmation guards, per-repository write
+    serialization, the undo stack, protected branches, path validation.
+  * The upstream documentation, kept verbatim as README.upstream.md and
+    README.upstream.en.md.
+
+Third-party components
+--------------------------------------------------------------------------------
+
+  dsh-wsl-workspace   registry format read at <DSH_HOME>/wsl-workspaces.json,
+                      and the WSL path conventions reimplemented (not imported)
+                      in src/target.js. Ported helpers are marked as such.
+  dsh-better-sidebar  optional peer; the tab host when installed.
+  dsh-ide-git         the baseline this is a patch on.
+
+================================================================================

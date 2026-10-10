@@ -1,176 +1,232 @@
-# dsh-ide-git
+# dsh-wsl-git
 
-[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
+**在 WSL 发行版内执行 `git` 的 IDE 级 Git 工具窗口 —— 作为 [dsh-ide-git](https://github.com/KannaKuron/dsh-ide-git) 0.15.0 的 fork 补丁发布。**
 
-简体中文 | [English](README_EN.md)
+[![baseline](https://img.shields.io/badge/baseline-dsh--ide--git%400.15.0-blue)](#相对-baseline-的改动)
+[![license](https://img.shields.io/badge/license-MIT-green)](#许可与署名)
 
-> 给 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 的侧边栏装一个 **IDE 级的 Git 工具窗口**——左边分支树、中间提交图谱、右边变更与提交详情,操作方式对齐 JetBrains 系 IDE 的 Git 面板;以 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 原生 Tab 的形式注册,右侧栏与底部面板都能用;v0.13.0 起还可挂在**主对话区**(「对话 / 轨迹」旁边的 Git 标签页,设置里可关)。
+面板本身**未作改动**:分支树、提交图谱、变更与暂存、提交详情、逐行 diff、右键发送到对话、删除可撤回、动作条可配置、21 种界面语言——全部来自基线。唯一的区别是 **`git` 在哪里执行**:会话工作区属于哪个 WSL 发行版,就在那个发行版里跑。
 
-DSH 自带的 Git 面板覆盖「暂存 / 提交 / 还原 / 看历史」;`dsh-ide-git` 补齐 IDE 用户习惯的那一层:**分支树 + 右键分支操作 + 提交图谱 + 提交详情 + 变更列表 + 提交框**。
+```
+基线  dsh-ide-git 0.15.0 (MIT, © 2026 KannaKuron)
+本件  0.15.0-wsl = 基线 + 一层 WSL 执行与路径翻译补丁
+```
 
-## 它解决什么
+---
 
-- **分支管理没有树**:内置面板只有一个分支下拉。这里给出 `HEAD(当前分支) / 本地 / 远程 / 标签` 的分组树,每个分支带 ahead/behind 角标、上游、worktree 占用标记(`W`)。
-- **历史只是列表**:这里画出提交图谱(lane 拓扑 + 分支/标签 ref 徽章),支持加载更多与过滤(文本 / 哈希 / 作者)。
-- **想看某个提交改了什么**:点提交直接进详情——作者、日期、完整提交信息、变更文件(含 +/− 行数),点文件看逐行 diff(红绿 + 行号 + hunk 高亮)。
-- **想指给 AI 一段代码**:在 diff 窗里选中几行、右键,把「哪个文件哪几行」(附提交或工作区上下文)直接发进当前会话的输入框。
-- **想比较分支**:分支右键即可与当前分支比较,结果按文件与提交数汇报。
-- **操作要够全**:签出、从任意分支/提交新建分支、重命名、删除、合并到当前、变基当前到此、新建标签、cherry-pick、还原提交、重置(保留/丢弃)、fetch / pull --ff-only / push(确认后)。
+## 主要特点
 
-## 效果
+### 一、`git` 在发行版内执行,而且发行版由工作区决定
 
-> 下面这些图取自一个**只装了两个插件**(`dsh-better-sidebar` + 本插件)的干净 DSH,绑定在一个虚构的演示仓库上(见 `scripts/demo-repo.mjs`),画面里没有真实工作区、没有壁纸插件、也没有其它面板。
+这是本补丁存在的理由。DSH 把一个 WSL 工作区存成 UNC 路径,**那条路径自己就带着发行版名**,所以不需要任何配置:
 
-<table>
-<tr>
-<td align="center" width="58%"><img src="docs/screenshots/1-bottom-workbench.png" alt="底部工作台:分支树 / 提交图谱 / 变更与提交"/></td>
-<td valign="top"><b>底部工作台(宽扁 → 三栏)</b><br/>左列是 IDEA 式动作条:按<b>自身高度</b>决定放几个按钮,放不下的收进 <code>⋯</code>,末尾 <code>⚙</code> 可调顺序与显隐;中列是提交列表——列序与 IDEA 一致(<b>日期 → 提交人 → 图谱 → 分支标签 → 提交信息</b>),上方一排筛选(文本/哈希、分支或标签、提交人、日期、路径)与排序方向;右列是变更分组与提交框。</td>
-</tr>
-</table>
-
-<table>
-<tr>
-<td align="center" width="58%"><img src="docs/screenshots/2-commit-menu.png" alt="提交右键菜单"/></td>
-<td valign="top"><b>提交右键</b><br/>详情、复制修订号、签出该修订、在此新建分支、新建标签、优选(Cherry-Pick)、还原提交、重置到此(保留/丢弃更改)——破坏性项标红,菜单在面板内定位,底部工作台里同样能弹出来。</td>
-</tr>
-<tr>
-<td align="center" width="58%"><img src="docs/screenshots/3-branch-undo.png" alt="删除分支后的撤回浮窗"/></td>
-<td valign="top"><b>删除可撤回</b><br/>删除分支/贮藏是<b>真删除</b>,但宿主在动手前记下了对象 id:右下角浮窗点「撤回」即可恢复(一次性、30 分钟内有效);错过浮窗还有顶栏的「最近可撤回的操作」入口。删除 <code>main</code>/<code>master</code> 需要输入分支名确认。</td>
-</tr>
-</table>
-
-<table>
-<tr>
-<td align="center" width="58%"><img src="docs/screenshots/4-rail-settings.png" alt="动作条设置:排序与显隐"/></td>
-<td valign="top"><b>动作条可配置</b><br/>拖动或用箭头调整顺序、眼睛图标逐项显隐,配置只存「排列 + 隐藏」并做过归一化,以后新增动作不会打坏旧配置。</td>
-</tr>
-<tr>
-<td align="center" width="58%"><img src="docs/screenshots/5-commit-detail.png" alt="提交详情与逐行 diff"/></td>
-<td valign="top"><b>提交详情</b><br/>完整提交信息、作者与日期、变更文件列表(带 +/− 行数),点文件看逐行 diff(行号 + hunk 高亮 + 红绿底)。</td>
-</tr>
-</table>
-
-<table>
-<tr>
-<td align="center" width="58%"><img src="docs/screenshots/6-right-sidebar.png" alt="原生右侧栏里的同一面板"/></td>
-<td valign="top"><b>同一个注册,两种布局</b><br/>窄而高的<b>原生右侧栏</b>改用堆叠布局:动作条铺成顶部一行、变更在先、提交列表随后——面板只量自己的尺寸,从不猜自己在哪个容器里。截图顺序、演示仓库与干净环境都由 <code>scripts/screenshots.mjs</code> 复现。</td>
-</tr>
-</table>
-
-## 右键发送到对话
-
-面板里的一切都能右键塞进**当前会话的输入框**——走 DSH 官方的 composer 插入通道(不动你已输入的文字,追加在末尾;发送中或服务不在时自动退化为复制到剪贴板并提示,绝不死点击):
-
-- **提交** → `git 提交 47ad017「提交标题」(仓库 xxx)`:短哈希 + 提交信息 + 仓库,一段话指名一个修订;
-- **分支** → `git 分支 main(仓库 xxx)`;
-- **文件**(变更列表与提交详情的文件行)→ 一个 `@路径` 文件引用 chip(DSH 原生 @ 语法,含空格的路径自动加引号),或者只发文件路径;
-- **diff 选中行**:在提交详情或工作区变更打开的 diff 窗里**选中一段文本再右键** → 「发送选中行到对话」:`@文件` chip + 行号说明——提交场景是「第 N–M 行(提交 47ad017「标题」@ 当前分支)」,工作区场景是「第 N–M 行(工作区已暂存 / 未提交)」。行号由选区所在的 diff 行按 hunk 头换算成**新文件行号**;选中的全是删除行时用旧号并标注「旧行号」。选区落不到可定位的 diff 行上时,菜单退化为「发送选中片段到对话」(原文截断 600 字符),不编造行号;菜单里同时有「复制选中引用」。没有选区时右键保持浏览器默认菜单。
-
-配套已经就位的几件事:变更文件行与详情文件行的行首图标按扩展名着色(DSH 自家 FileTypeIcon);diff 预览用 DSH 自家 DiffBlock 组件渲染(红绿底、复制 / 换行工具栏,视觉与宿主一致);diff 窗高度可拖拽调节并按位置记忆;整个面板还可以挂进**主对话区**——「对话 / 轨迹」旁的 Git 标签页,插件设置里可关。
-
-## 挂在哪里:两个宿主,一个面板
-
-本插件只注册一次,落到哪个面上由**宿主**决定,两条通道互斥:
-
-| 宿主 | 条件 | 你得到什么 |
+| 工作区路径 | 解析结果 | 实际执行的 git |
 |---|---|---|
-| **dsh-better-sidebar**(底座,可选) | 装了它 | 它的 Tab 系统:右侧栏里的原生 Tab **加上底部工作台**;它的设置页 `侧边卡片` 里能看到本插件的卡片 |
-| **DSH 原生右侧栏** | 没装底座时自动接管 | 右侧栏 Guide 页里的 **Git** 胶囊 → 点开就是同一个面板 |
-| **主对话区标签页**(v0.13.0 起) | 总是可用(可在设置里关闭) | 会话顶部「对话 / 轨迹」旁多一枚 **Git** 标签,点它整块主对话区变成 Git 工具窗口;开关在插件设置 →「面板放置」 |
+| `\\wsl.localhost\Ubuntu-24.04\home\you\proj` | `Ubuntu-24.04` | 发行版内的 `git`(实测 `2.43.0`) |
+| `\\wsl.localhost\Ubuntu-20.04\home\you\proj` | `Ubuntu-20.04` | 发行版内的 `git`(实测 `2.25.1`) |
+| `C:\Users\you\proj`(未注册) | — | Windows `git`,与基线逐字节一致 |
 
-底座在场时以它为准(它还带底部工作台);底座**晚到**会顶掉原生注册再挂到它那边。所以**只装本插件也能用**,没有任何前置要求。
+一份安装服务任意多个发行版;**非 WSL 工作区行为完全不变**。选项 `distro` / `user` / `gitPath` 全部默认空,只在工作区说不出时兜底,永远不覆盖工作区。
 
-同一个面板会出现在形态完全不同的面上,所以布局靠量而不是猜:
+配置 `distro` 只在一种情况下生效:工作区是盘符路径、且注册表里没有它。默认关闭。
 
-| 面 | 形态 | 本插件的布局 |
+### 二、失败会被点名,而不是伪装成"不是 git 仓库"
+
+这是基线在 WSL 下最容易误导人的地方。
+
+| 情况 | 基线说 | 本件说 |
 |---|---|---|
-| 右侧栏(原生的,或底座桥接过来的) | 窄而高 | `stack`:变更区在提交历史之上,分支树可收起,详情/差异占满主区 |
-| 底部工作台(底座自有) | 宽而扁 | `columns`:分支树 · 提交图谱 · 变更与提交框,三栏并排——就是 JetBrains Git 工具窗口的样子 |
+| 发行版未注册 | `not a git repository` | `wsl-distro-missing`,点名发行版并提示 `wsl -l -v` |
+| WSL 服务异常 | `not a git repository` | `wsl-launcher`,带与语言无关的 `Wsl/…` 错误码 |
+| 发行版内没装 git | `not a git repository` | `git-missing`,点名发行版并给出安装命令 |
+| `cwd` 是 Linux 路径 | 静默解析成 `C:\home\…`(指向空处) | `bad-request`,`cwd must be a host path …, not a Linux path` |
 
-插件不猜自己在哪儿,而是用 `ResizeObserver` 量自己的容器:宽 ≥ 600px 且宽 ≥ 高 × 1.15 走三栏,否则走纵向堆叠(宽度说了算,高度没有否决权)。自由浮窗、移动端抽屉同样自适应。
+### 三、路径按你思考的方式显示
 
-## 功能一览
+仓库选择器显示 **`Ubuntu-24.04 · /home/steaf/workspace/device_xcar_1.0`** 而不是 `\\wsl.localhost\Ubuntu-24.04\home\…`;鼠标悬停可看原始宿主路径。仓库名也从"整条 UNC 路径"恢复成目录名。
+
+> 交互契约不变:请求里流转的路径**始终是宿主拼写**,与 DSH 给会话存的 cwd 同一种。客户端不需要知道自己在跟哪个世界说话。
+
+### 四、继承自基线的面板能力(未改动)
 
 | 区域 | 能力 |
 |---|---|
-| 动作条 | IDEA 式左侧竖排(底部工作台)/ 顶栏下一行横排(右侧栏):刷新、新建分支、签出、删除、比较、显示差异、贮藏、新建标签、收藏、抓取、拉取、推送。**按可用空间自动决定放几个**,放不下的收进 `⋯ 更多`;末尾 `⚙ 设置` 可拖动排序、逐项显隐(存 `dsh-ide-git.rail.v1`)。每个按钮按当前状态点亮/置灰(没有其他分支就不能删除/签出/比较,没有远程就不能抓取/推送,没有上游就不能拉取,没有变更就没有差异可看) |
-| 状态行 | 当前分支、上游、`↑ahead ↓behind`、stash 数量、忙碌指示 |
-| 分支树 | `HEAD / 本地 / 远程 / 标签` 分组(可折叠)、过滤框、星标当前分支、ahead/behind 角标、worktree 占用标记;本地蓝 / 远程紫 / 标签黄 / HEAD 绿 |
-| 分支右键 | 签出、将当前分支变基到此、合并到当前分支、与当前分支比较、从该分支新建分支、重命名、删除(当前分支禁用)、更新(Fetch)、推送、发送到对话(分支名 + 仓库) |
-| 历史筛选 | 文本或哈希、分支或标签、提交人、日期(今天 / 近 7 天 / 近 30 天 / 今年),外加排序方向(新→旧 / 旧→新)与一键清除;路径筛选回车后由 git 服务端过滤(`git log -- <path>`) |
-| 提交列表 | 列序对齐 IDEA:**日期 → 提交人 → 图谱 → 分支标签 → 提交信息**;lane 拓扑图整格连线(相邻行像素对齐)、HEAD 空心点、refs 徽章(HEAD 绿 / 本地蓝 / 远程紫 / 标签黄,最多 3 个 + `+n`)、加载更多(每页 120) |
-| 提交右键 | 提交详情、复制修订号、签出该修订(确认)、在此新建分支、新建标签、cherry-pick、还原提交、重置到此(保留 / 丢弃更改)、发送到对话(短哈希 + 提交信息 + 仓库) |
-| 提交详情 | 完整提交信息、作者/日期、变更文件列表(+/−),点文件看逐行 diff |
-| diff 窗 | DSH 自家 DiffBlock 渲染(红绿底 + 复制/换行工具栏)、高度可拖拽调节并按位置记忆;**选中 diff 行右键**把行级引用发进对话——`@文件` + 第 N–M 行 + 提交(短哈希/标题/当前分支)或工作区(已暂存/未提交)上下文,删除行标注旧行号,选区定位不到行时发选中片段(截断 600 字符),另有「复制选中引用」 |
-| 变更列表 | 冲突 / 已暂存 / 更改 / 未跟踪 四组,行内 暂存 / 取消暂存 / 丢弃,分组级「全部暂存 / 全部取消暂存」,点击行看 diff |
-| 提交框 | 多行提交信息、`Ctrl+Enter`(macOS `Cmd+Enter`)提交、修补上次提交(`--amend`) |
-| 文件右键 | 显示差异、暂存/取消暂存、丢弃更改、复制路径、发送到对话(`@文件` 引用 chip 或文件路径) |
-| 安全与撤回 | 删除分支 / 删除贮藏后右下角弹提示条,点「撤回」即可恢复(真删除 + 按删除前记下的对象 id 重建,一次性、30 分钟内有效),顶栏的撤回图标里也能找到最近删除;`main`/`master`/`trunk` 的删除要求输入分支名确认,所有破坏性确认框焦点默认在「取消」;同一仓库的写操作在宿主串行执行;仓库里还有未结束的 merge / rebase / cherry-pick / revert / bisect 时,相关动作全部置灰并说明原因 |
+| 分支 | `HEAD / 本地 / 远程 / 标签` 分组树、过滤、ahead/behind 角标、worktree 占用标记;右键签出 / 变基 / 合并 / 比较 / 新建 / 重命名 / 删除 / 更新 / 推送 |
+| 历史 | lane 拓扑提交图谱 + refs 徽章 + 分页(120/页);筛选:文本或哈希、分支或标签、提交人、日期、路径(服务端 `git log -- <path>`)、排序方向 |
+| 提交 | 详情(完整信息 / 作者 / 日期 / 变更文件 +/−)、逐行 diff(行号 + hunk 高亮 + 红绿底 + 复制 / 换行) |
+| 变更 | 冲突 / 已暂存 / 更改 / 未跟踪 四组;行内暂存 / 取消 / 丢弃;分组级全部暂存 / 取消;点击看 diff |
+| 提交框 | 多行信息、`Ctrl+Enter` 提交、`--amend` |
+| 发到对话 | 提交、分支、文件(`@路径` chip,含空格自动加引号)、**diff 选中行**(换算成新文件行号,删除行标旧行号)一键送进当前会话输入框 |
+| 安全 | 破坏性操作要 `confirm: true` + 二次确认;`main`/`master`/`trunk` 删除要输入分支名;同仓库写操作宿主串行;merge / rebase / cherry-pick / revert / bisect 未结束时相关动作置灰 |
+| 撤回 | 删除分支 / 删除贮藏 / 丢弃更改都留浮窗可撤回(按删除前记下的对象 id 重建,一次性、30 分钟有效) |
+| 布局 | 同一个注册自适应:底部工作台三栏、侧边栏纵向堆叠、主对话区标签页;靠 `ResizeObserver` 量容器,不猜 |
+| 语言 | 21 种词典,跟随 DSH 语言设置实时切换,缺键回退英文 |
+
+四个可挂载面(底座 Tab / 底部工作台 / DSH 原生右侧栏 / 主对话区标签页)、完整的动作条配置、撤销栈等细节见**[上游原文](README.upstream.md)**。
+
+### 五、随基线 0.15.0 一并带来的能力
+
+本件已 rebase 到 **0.15.0**,上游在这两个基线之间新增的功能**全部继承**,且每一项都已套用 WSL 执行层:
+
+| 能力 | 说明 |
+|---|---|
+| 两阶段变更 | `stats` / `statsDeferred`:先出变更行,`+/-` 数字随后单独取;树里变更上千项时不再一次算完 |
+| 并发读链 | `summary` 的独立查询并发执行(分支链因依赖仍顺序),只剩两条链的等待时间 |
+| 未跟踪文件预览 | 未跟踪文件也能看 diff —— 走 `git diff --no-index /dev/null <文件>` 生成真实的「新文件」补丁 |
+| Clone | 面板内从 URL 克隆到指定目录(父目录必须存在,git 自己保证目标非空则不覆盖) |
+| Git 输出视图 | 最近 200 次 git 调用的环形缓冲(VS Code 的 `scm showOutput` 等价物),**每条都标明执行世界**:`[Ubuntu-24.04] status --porcelain` |
+| 沉浸式对话席位 | 主对话区的沉浸布局开关 |
+
+---
+
+## 相对 baseline 的改动
+
+### 新增文件
+
+| 文件 | 作用 |
+|---|---|
+| `src/target.js` | 纯函数:UNC 解析、**双向**路径映射、注册表查找、执行世界解析 |
+| `src/wsl-git.js` | 纯函数:`wsl.exe` argv、spawn 规格、失败分类 |
+| `tests/target.test.mjs` | 38 条纯函数断言(含历史 bug 的正/反回归,以及逆映射与 git 自身输出一致的基准) |
+| `scripts/acceptance.mjs` | 真实传输 + 映射闭环 + **参数方向** + HTTP 面验收,只读 |
+
+### 修改的文件
+
+**`src/index.js`**
+
+| 改动 | 说明 |
+|---|---|
+| `runGit` → `runGitTarget` | 唯一的 spawn 出口按 `cwd` 解析执行世界;约 40 个调用点因此一行未改 |
+| 新增 `hostPathOf()` | git **输出**的绝对路径映射回宿主拼写,**5 处**:`repoRootOf`、`worktreesOf`、`operationOf`、`collectSubmoduleRepos`、`scanRepos` |
+| 新增 `linuxSpellingOf()` | **参数**方向的逆映射,用于上游 0.15.0 新增的 2 处:`clone` 的目标目录、`diff --no-index` 的文件。`diff` 那一处**参数与头部改写必须用同一个拼写**(否则预览头部会残留绝对路径) |
+| `requireAbsolute` | 拒绝 Linux 绝对路径(基线会静默变成 `C:\home\…`) |
+| `undoApply` | 写回后逐个文件读回比对哈希;不符即抛且**保留 undo 条目**以便重试 |
+| `version` | 增加 `world` / `target` 字段(超集,面板未调用) |
+| `gitLogs` | 环形缓冲的每条记录标明执行世界 |
+| Config | 新增 `distro` / `user` / `gitPath`,默认空;`apply(ctx, config)` 发布设置 |
+
+**`src/client.js`**
+
+| 改动 | 说明 |
+|---|---|
+| `baseName` / `dirName` | 先归一化 `\`→`/` 再切分:基线对 UNC 路径会把整条路径当名字返回 |
+| 新增 `distroOf` / `displayPath` / `workspaceLocation` | 仓库选择器显示发行版 + Linux 路径,悬停看原始宿主路径 |
+
+**`package.json` / `dsh.plugin.json` / `cordis.patch.yml`**
+
+包名、版本、描述;cordis 行 id `ide-git` → `wsl-git`(设置按行 id 持久化,共用会读写同一份文档);`files` 收录整个 `src/` —— 基线只列了 `src/index.js` 与 `src/client.js`,新增模块在打包式安装下会丢。
+
+**标识符改名**(两半共 41 处):插件 id、路由前缀 `/dsh-wsl-git/api`、Tab id、locale 命名空间、localStorage 前缀、全部 effect 标签与日志前缀。
+
+### 明确未改动
+
+面板 UI 与布局算法、21 种 i18n 词典、CSS、提交图谱算法、右键菜单与"发送到对话"链路、AI 提交信息链路、以及全部安全语义(确认守卫、仓库串行锁、撤回栈、受保护分支)——**逐字保留**。上游两个 README 原文保留为 `README.upstream.md` / `README.upstream.en.md`。
+
+### 关键设计决定
+
+1. **`-d` 从不省略。** 本机默认发行版与工作区所属发行版可能不同,交给 `wsl.exe` 选会跑错 git、读错文件系统。
+2. **`git -C <dir>`,不用 `wsl.exe --cd`。** `-C` 只要求 git,不要求 wsl.exe 的版本;而且整条命令是 **argv 数组、无 shell**,提交信息里的引号、换行、`$` 原样穿过边界。
+3. **git 环境用 `-e env KEY=VALUE` 注入**,不动 `WSLENV` —— 不修改你和其它插件共享的变量。
+4. **`cwd` 绝不用 UNC。** 用 UNC 工作目录启动 Windows 子进程是 Node/Windows 的已知缺陷;`git -C` 已经决定了 Linux 侧,Windows 侧只需一个真实存在的目录。
+5. **`WSL_UTF8=1` 是必需的**,否则 `wsl.exe` 用 UTF-16 输出,下游所有模式匹配都会失配。
+6. **`/mnt/*` 走盘符,ext4 走 UNC。** 9P 共享只服务 ext4,drvfs 经 UNC 读取会 `EPERM`(本机实测)。
+7. **只映射 git 输出里"定义为绝对路径"的字段**,不整段重写 stdout —— diff 正文里合法出现的绝对路径不能被改。
+
+完整设计与实测数据见 **[FORK.md](FORK.md)**。
+
+---
 
 ## 安装
 
 ```sh
-# 本插件可以单独使用:面板直接出现在 DSH 原生右侧栏
-dsh plugin --profile web add dsh-ide-git
-# 可选底座:装了它才会多出底部工作台,并跟随它的侧栏布局
-dsh plugin --profile web add dsh-better-sidebar
-# 重启 dsh web
+# 从 npm
+dsh plugin --profile desktop add dsh-wsl-git
+
+# 从 git 仓库
+dsh plugin --profile desktop add github:SteafShi/dsh-wsl-git
+
+# 从本地目录开发(link,改动即时生效)
+dsh plugin --profile desktop add "link:/path/to/dsh-wsl-git"
 ```
 
-装好后打开任意会话:
+可选底座 `dsh-better-sidebar`(装了才有底部工作台;没装也能挂 DSH 原生右侧栏)。装完**重启宿主**。
 
-- **只装本插件**:点会话头右侧的「打开右侧边栏」→ Guide 页里的 **Git** 胶囊 → 面板打开;
-- **装了底座**:会话头右侧的面板开合按钮 → 面板 Tab 条右侧 `+` → 选 **Git**(底部工作台);原生右侧栏的 `+` → **Git**(同一注册,同一份状态);
-- 底座在场时,它的设置页 **侧边卡片** 分区里也会出现本插件的卡片(标题 / id / 启用开关),随时停用。
+> ⚠️ **宿主半不会热重载。** 新增 bundle 会被立即识别,但**修改已挂载的宿主模块不会重新导入**——本机实测:改了 `src/index.js` 后同一路由仍返回旧代码。请用应用内「设置 → 插件 → 立即重启」或把插件关掉再打开。客户端半改动只需刷新页面。
 
-### 兼容性
+**不要和 `dsh-ide-git` 同时启用**:两者各注册一个 Git 页签,而基线在 WSL 工作区里是坏的。
 
-- `engines.dsh` 声明为 **`>=0.1.2-0`** ——0.1.2 起的全部版本都算,包括 `0.1.5-rc` / `0.1.6-alpha` 这类**预发布**(纯 semver 下预发布默认不匹配任何范围,所以起点写成了 `-0`)。**同一个值也是 `@deepseek-ai/dsh` 的 peerDependencies**:dsh 0.1.7 起会强制执行 peer 里的 `@deepseek-ai/dsh*` 范围(不满足就不加载),而 `engines` 没有任何读取方——写进 peer 才算数。范围是**开放下界、不封顶**,所以 0.1.7 起的任何宿主(含 rc / alpha 预发布)都不会因此被禁用;0.1.0–0.1.6 没有这套检查,完全不受影响。
-- 只依赖三样长期契约:宿主半的 `webServer.register({ kind: 'prefix' })` 路由、客户端半的 `window.__ModuleLoader__.load({ id, factory })`、以及客户端的 `slots` 服务。**不引用 `ui-primitives` 图标集**(图标全是自带 SVG),所以宿主删改图标不会波及本插件。
-- 底座是**可选** peer:没装、装坏了、或它自己要等上游修,都不影响本插件挂到原生右侧栏。
+---
 
-### 界面语言
-
-跟随 DSH 的语言设置(`ctx.locale`)实时切换,内置 **21 种**词典:简繁中文(含 `zh-HK` / `zh-MO` / `zh-TW`)、英语、日语、韩语、德语、法语、意大利语、葡萄牙语、俄语、荷兰语、波兰语、瑞典语、土耳其语、印尼语、越南语、泰语、印地语、阿拉伯语。词典同时注册进 DSH 的 locale 注册表(`ctx.locale.register`);解析顺序是「精确 tag → 主语言子标签 → 英文」,而**英文始终是键完整的那本**,所以任何未覆盖的语言都回退英文,不会露出键名。
-
-词典就在 `src/client.js` 的 `LOCALES` 表里:一门语言一个条目,条目前面有一行 `/* locale: <tag> */` 标记。**校验是自动的**——冒烟测试强制每本词典的键集与中文完全一致(缺键会静默回退英文,面板就成了半翻译状态,那正是这条测试要挡住的)。
-
-## 工作原理
-
-```
-宿主半 src/index.js                       客户端半 src/client.js
-  POST /dsh-ide-git/api/<method>            ctx.betterSidebar.registerTab({ id: 'dsh-ide-git:panel' })
-  └─ spawn('git', argv, { cwd })            └─ Panel:ResizeObserver → columns / stack
-     └─ 会话工作区 = cwd(客户端 scope.cwd 传入)
-```
-
-- **宿主半**:一个前缀路由 `/dsh-ide-git/api`,方法表 32 个(`summary` / `branches` / `log` / `commitDetail` / `diff` / `compare` / `stage` / … / `push` / `tagDelete` / `version`)。所有 git 调用都是 **argv 数组 + `spawn`**(没有 shell 字符串、没有 `exec`),参数先过校验(绝对路径、ref 不以 `-` 开头、无控制字符、路径不越出仓库)。
-- **客户端半**:无构建、单文件、`window.__ModuleLoader__.load({ id, factory })` 包装,只 `require('react')`(DSH 客户端基线模块白名单内)。
-- **信任围栏**:路由挂在 DSH 自己的 web server 上,天然同源;只有 Host 为 loopback,或浏览器标记 `Sec-Fetch-Site: same-origin/same-site` 的请求才会被服务。
-- **破坏性操作**:`push` / 硬重置 / 强制删分支 / 丢弃未跟踪文件 / 删除 stash 都必须显式 `confirm: true`,UI 侧一律弹二次确认。
-
-## 限制与路线图
-
-- **v0.1.0 只覆盖主路径**:分支树 + 图谱 + 变更 + 提交 + 详情 + 常用分支/提交操作。下面的还在路上:
-  - 变更/提交的**多选与批量操作**、按文件部分提交(类似 IDEA 的 Changelist);
-  - 交互式变基(`rebase -i`)、fixup/squash、补丁(format-patch/apply);
-  - 三方合并冲突编辑器、冲突解决动作(接受本地/远端);
-  - blame / 文件历史视图、行级注释;
-  - 设置页的插件自有开关(提交后自动刷新、diff 上下文行数等);
-  - worktree 视图(当前只在分支行标注占用)。
-- **只面向 `web` profile**:`dsh.client.platform` 为 `web`;桌面客户端的 renderer 复用同一套 shell 资产,但尚未真机验证。
-- **不写 `.git`**:所有操作都通过 `git` 命令走正常索引/引用,插件不直接改 `.git` 内部文件。
-- **大仓库**:提交列表分页(120/页),diff 输出上限 400KB(超出截断并标记)。
-
-## 开发
+## 验收
 
 ```sh
-npm test      # 两层:smoke(文件级:清单一致性、客户端包装、白名单、确认守卫、方法表)
-              #      + api(临时真实仓库直驱宿主路由:解析、暂存/提交/分支/标签/stash、全部守卫与信任围栏)
+node --test tests/target.test.mjs     # 38 条:纯决策,不需要 WSL
+node scripts/acceptance.mjs           # 真实传输 + 映射闭环 + 面板自己的 HTTP 路由
 ```
 
-本机联调:把仓库加到 web profile 后重启 `dsh web`;客户端半改动由 DSH 热加载,宿主半改动需要重启。
+`scripts/acceptance.mjs` **只读**,不会改动任何仓库。它会自动发现 DSH 已注册的 WSL 工作区,所以有 WSL 工作区的机器上无需参数;harness 不可达时跳过 HTTP 部分。
 
-## 许可
+本机验收结果(`acceptance.mjs`,全部通过):
 
-MIT © KannaKuron
+```
+Ubuntu-24.04  git 2.43.0 · toplevel 映射后宿主可 stat/readdir/readFile · 再解析回同一世界 · git 目录可读(merge/rebase 标记)
+Ubuntu-20.04  git 2.25.1 · 同上
+HTTP 面       version/repos/summary/branches/log/stashList/undoList 全 200
+              未注册发行版 → wsl-distro-missing;Linux 路径 → bad-request
+```
+
+---
+
+## 已知限制
+
+- **上游需手动跟进。** 本件已 rebase 到基线 0.15.0;上游此后的改动不会自动合并——[PUBLISHING.md](PUBLISHING.md) 记着 rebase 流程,以及 rebase 时**必须重新确认**的那份「绝对路径点」清单。
+- **宿主侧文件访问走 9P**(ext4 仓库):仓库发现与丢弃撤回的快照都读 `\\wsl.localhost\…`。本机实测很便宜(`existsSync` 2–3 ms、`realpathSync` 7–9 ms、22 目录扫 `.git` 44 ms),所以仓库发现**有意**留在宿主;条目多得多的容器工作区值得重新测量。
+- **丢弃撤回会校验自己的写入** —— 快照是用户手上唯一一份被丢弃的字节,写不进就抛错并保留撤回条目,而不是假装成功。
+- **`/mnt/<盘>` 工作区**需要 dsh-wsl-workspace 先把发行版写进 `<DSH_HOME>/wsl-workspaces.json`;没有该记录时按普通 Windows 工作区处理。
+- 面板功能本身的路线图(多选批量、交互式变基、冲突编辑器、blame、worktree 视图)沿用上游,见 [上游原文](README.upstream.md)。
+
+---
+
+## 许可与署名
+
+MIT。`LICENSE` 逐字保留基线原文与版权声明,未作任何改动:
+
+```
+MIT License · Copyright (c) 2026 KannaKuron
+```
+
+本补丁的署名与出处记在 `NOTICE`,分发的副本必须同时保留 `LICENSE` 与 `NOTICE`。
+
+| | |
+|---|---|
+| **基线** | [dsh-ide-git](https://github.com/KannaKuron/dsh-ide-git) 0.15.0 — MIT, © 2026 KannaKuron |
+| **本 fork** | [dsh-wsl-git](https://github.com/SteafShi/dsh-wsl-git) 0.15.0-wsl — MIT, © 2026 SteafShi |
+| **基线↔本件** | [`patch/dsh-wsl-git-0.15.0-wsl.on-dsh-ide-git-0.15.0.patch`](patch/README.md)(该补丁已实测:打到纯净 0.15.0 上得到的 27 个文件与本包逐字节一致) |
+| **依赖的兄弟插件** | [dsh-wsl-workspace](https://github.com/dsh-wsl-workspace-maintainers/dsh-wsl-workspace)(WSL 工作区注册表)、[dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)(可选底座) |
+
+---
+
+## English summary
+
+An IDE-grade Git tool window that runs `git` **inside the WSL distribution the
+session workspace belongs to** — released as a patch on
+[dsh-ide-git](https://github.com/KannaKuron/dsh-ide-git) 0.15.0 (MIT).
+
+**The panel is unchanged.** What differs is where `git` executes: a WSL workspace
+path already names its own distribution (`\\wsl.localhost\Ubuntu-24.04\…`), so
+nothing is hard-coded and one install serves every distribution. A workspace that
+is not a WSL workspace runs the local `git` exactly as the baseline did.
+
+Failures are named instead of being misread as "not a git repository": an
+unregistered distribution (`wsl-distro-missing`), an unhealthy WSL service
+(`wsl-launcher`), a distribution without git (`git-missing`), and a Linux path at
+the API boundary (`bad-request`, rather than the silent `C:\home\…` resolution).
+
+Two pure modules carry it — `src/target.js` (distribution resolution and
+bidirectional path translation) and `src/wsl-git.js` (the `wsl.exe` argv, the
+spawn spec, failure classification) — pinned by 35 unit assertions; the live
+transport, the path-mapping loop and the panel's own HTTP route are covered by
+the read-only `scripts/acceptance.mjs`. Design rationale and measurements:
+[FORK.md](FORK.md). Baseline documentation is kept verbatim as
+[README.upstream.md](README.upstream.md) and
+[README.upstream.en.md](README.upstream.en.md).

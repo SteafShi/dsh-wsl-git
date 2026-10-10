@@ -1,8 +1,8 @@
 {
-  "id": "dsh-external/dsh-ide-git",
-  "version": "0.15.0",
+  "id": "dsh-external/dsh-wsl-git",
+  "version": "0.15.0-wsl",
   "main": "./src/index.js",
-  "description": "IDE 级 Git 操作面板:分支树 + 提交图谱 + 变更/暂存/提交 + 提交详情。装了 dsh-better-sidebar 时挂成它的原生 tab(右侧栏 + 底部工作台);没装时直接挂 DSH 原生右侧栏,单独安装即可用。JetBrains 风格 Git 工具窗口 for DeepSeek Harness.",
+  "description": "IDE 级 Git 操作面板,但 git 在会话工作区所属的 WSL 发行版内执行:分支树 + 提交图谱 + 变更/暂存/提交 + 提交详情。发行版由工作区路径决定(UNC 路径自带发行版名),不硬编码;非 WSL 工作区行为与本地版一致。装了 dsh-better-sidebar 时挂成它的原生 tab(右侧栏 + 底部工作台);没装时直接挂 DSH 原生右侧栏。Fork of dsh-ide-git 0.13.5.",
   "engines": {
     "dsh": ">=0.1.6-alpha.2"
   },
